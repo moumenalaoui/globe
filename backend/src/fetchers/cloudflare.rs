@@ -3,7 +3,10 @@ use anyhow::Result;
 use serde::Deserialize;
 use std::time::Duration;
 
-const ANNOTATIONS_ENDPOINT: &str = "https://api.cloudflare.com/client/v4/radar/annotations";
+// The `/outages` sub-resource is the one that returns network-outage
+// annotations in the shape parsed below. The bare `/radar/annotations` path
+// rejects the request with HTTP 400 (code 2001) unless a date range is given.
+const ANNOTATIONS_ENDPOINT: &str = "https://api.cloudflare.com/client/v4/radar/annotations/outages";
 
 #[derive(Debug, Deserialize, Default)]
 struct RadarResponse {
@@ -71,7 +74,15 @@ async fn fetch_annotations(
 ) -> Result<Vec<RadarEvent>> {
     let resp = client
         .get(ANNOTATIONS_ENDPOINT)
-        .query(&[("location", country), ("limit", "50")])
+        .query(&[
+            ("location", country),
+            ("limit", "50"),
+            // Required: Cloudflare returns HTTP 400 (code 2001, "must send
+            // either range or start & end dates") without a time bound. A
+            // one-year window captures recent outage annotations.
+            ("dateRange", "52w"),
+            ("format", "json"),
+        ])
         .bearer_auth(token)
         .send()
         .await?

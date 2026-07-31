@@ -1,5 +1,6 @@
 pub mod blocking;
 pub mod categories;
+pub mod censorship_index;
 pub mod countries;
 pub mod country_scores;
 pub mod deals;

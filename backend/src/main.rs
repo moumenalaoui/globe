@@ -17,6 +17,12 @@ pub type AppState = Arc<Mutex<Connection>>;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Load backend/.env (cwd is `backend/`) into the process environment so
+    // CLOUDFLARE_API_TOKEN and friends reach std::env::var below. A plain Rust
+    // binary — unlike Vite — does not read .env on its own. `.ok()` keeps
+    // startup working when no .env is present.
+    dotenvy::dotenv().ok();
+
     let conn = Connection::open("mena_ai.db")?;
     db::init_schema(&conn)?;
     println!("DB initialized and seeded.");
@@ -52,6 +58,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/tor-metrics", get(api::tor_metrics::list_tor_metrics))
         .route("/api/outages", get(api::outages::list_outages))
         .route("/api/rankings", get(api::rankings::list_rankings))
+        .route(
+            "/api/censorship-index",
+            get(api::censorship_index::list_censorship_index),
+        )
         .route(
             "/api/country-scores",
             get(api::country_scores::list_country_scores),
