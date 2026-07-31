@@ -1,0 +1,87 @@
+import { useEffect, useState } from 'react'
+import { getCategories } from '../lib/api'
+import { AMBER, BORDER, CRIMSON, DIM, LOCAL, MONO, MUTED, WHITE } from '../theme'
+
+const STATUS_COLOR = {
+  HEAVILY_CENSORED: CRIMSON,
+  PARTIALLY_CENSORED: AMBER,
+  ACCESSIBLE: LOCAL,
+  INCONCLUSIVE: DIM,
+}
+
+// Only categories with a real sample and at least a faint signal are worth a
+// row — an ACCESSIBLE category at 1% anomaly is just noise in a "what's
+// censored" view. Capped so the sidebar stays scannable.
+const MIN_MEASUREMENTS = 100
+const MIN_RATE = 0.03
+const MAX_ROWS = 12
+
+export default function CategoryBreakdown({ countryCode }) {
+  const [rows, setRows] = useState(null)
+  const [error, setError] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    setRows(null)
+    setError(false)
+
+    getCategories(countryCode)
+      .then((data) => {
+        if (!cancelled) setRows(data)
+      })
+      .catch(() => {
+        if (!cancelled) setError(true)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [countryCode])
+
+  if (error || !rows) return null
+
+  const shown = rows
+    .filter((r) => r.measurement_count >= MIN_MEASUREMENTS && r.anomaly_rate >= MIN_RATE)
+    .slice(0, MAX_ROWS)
+
+  if (shown.length === 0) return null
+
+  // Scale bars to the worst category so the ranking is legible even when
+  // absolute category rates are low (categories aggregate many URLs).
+  const maxRate = Math.max(...shown.map((r) => r.anomaly_rate))
+
+  return (
+    <section>
+      <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.1em', color: MUTED, marginBottom: 8 }}>
+        CONTENT CATEGORIES CENSORED
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {shown.map((r) => {
+          const color = STATUS_COLOR[r.status] ?? DIM
+          const width = maxRate > 0 ? Math.max(3, (r.anomaly_rate / maxRate) * 100) : 3
+          return (
+            <div key={r.category_code} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span
+                style={{ fontSize: 10, color: WHITE, width: 118, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                title={`${r.category_label} — ${r.measurement_count.toLocaleString()} measurements`}
+              >
+                {r.category_label}
+              </span>
+              <div style={{ flex: 1, height: 8, background: BORDER, position: 'relative' }}>
+                <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${width}%`, background: color }} />
+              </div>
+              <span style={{ fontFamily: MONO, fontSize: 9, color, width: 34, flexShrink: 0, textAlign: 'right' }}>
+                {Math.round(r.anomaly_rate * 100)}%
+              </span>
+            </div>
+          )
+        })}
+      </div>
+
+      <div style={{ fontFamily: MONO, fontSize: 8, color: MUTED, letterSpacing: '0.05em', marginTop: 6 }}>
+        % of OONI web-connectivity tests anomalous, by content category
+      </div>
+    </section>
+  )
+}

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import * as Cesium from 'cesium'
 import * as topojson from 'topojson-client'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
-import { BLACK, CRIMSON, DIM } from '../theme'
+import { BLACK, CRIMSON, DIM, HIGHLIGHT } from '../theme'
 import { BLOCKING_STATUS_COLOR } from '../lib/blockingRegistry'
 
 // Read from the environment rather than inlined here: anything in this file
@@ -43,6 +43,7 @@ const CESIUM_STATUS_COLOR = Object.fromEntries(
 )
 const CESIUM_DIM = Cesium.Color.fromCssColorString(DIM)
 const CESIUM_CRIMSON = Cesium.Color.fromCssColorString(CRIMSON)
+const CESIUM_HIGHLIGHT = Cesium.Color.fromCssColorString(HIGHLIGHT)
 
 function cesiumColorFor(status) {
   return CESIUM_STATUS_COLOR[status] ?? CESIUM_DIM
@@ -116,6 +117,7 @@ export default function Globe({
   onCountrySelect,
   onLoadError,
   layer = 'ALL',
+  selectedCode = '',
 }) {
   const containerRef = useRef(null)
   const viewerRef = useRef(null)
@@ -129,6 +131,15 @@ export default function Globe({
   const onLoadErrorRef     = useRef(onLoadError)
   useEffect(() => { onCountrySelectRef.current = onCountrySelect }, [onCountrySelect])
   useEffect(() => { onLoadErrorRef.current = onLoadError }, [onLoadError])
+
+  // The once-created preRender loop reads the selected code through this ref so
+  // it can hold the selected marker highlighted without re-running the init
+  // effect. `prevSelectedRef` lets the framing effect tell a real deselect
+  // (return to the whole-globe view) apart from the empty selection on first
+  // load (which must stay instant, since init already frames HOME_VIEW).
+  const selectedCodeRef = useRef(selectedCode)
+  const prevSelectedRef = useRef(selectedCode)
+  useEffect(() => { selectedCodeRef.current = selectedCode }, [selectedCode])
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -216,13 +227,21 @@ export default function Globe({
         const now = performance.now()
         const cycle = (now % PULSE_PERIOD_MS) / PULSE_PERIOD_MS
 
-        Object.values(markerState).forEach((m) => {
+        Object.entries(markerState).forEach(([code, m]) => {
           const alpha = m.alpha ?? 1
+          const selected = code === selectedCodeRef.current
 
           // Inconclusive markers are dot-only, so guard the ring.
           if (m.ringEntity) {
-            m.ringEntity.billboard.scale = 1 + 0.4 * cycle
-            m.ringEntity.billboard.color = m.color.withAlpha((1 - cycle) * alpha)
+            if (selected) {
+              // Held bright and enlarged instead of the fading pulse, so the
+              // selected country reads as the persistent focus.
+              m.ringEntity.billboard.scale = 1.6
+              m.ringEntity.billboard.color = CESIUM_HIGHLIGHT.withAlpha(0.9)
+            } else {
+              m.ringEntity.billboard.scale = 1 + 0.4 * cycle
+              m.ringEntity.billboard.color = m.color.withAlpha((1 - cycle) * alpha)
+            }
           }
 
           let dotScale = 1
@@ -234,6 +253,16 @@ export default function Globe({
               const t = elapsed / FLARE_DURATION_MS
               dotScale = t < 0.4 ? 1 + 2 * t : 1.8 - (1.8 - 1) * ((t - 0.4) / 0.6)
             }
+          }
+
+          // Selection takes precedence over hover: hold the picked marker gold
+          // and enlarged so a country chosen from the dropdown (which never
+          // flares) stands out just as clearly as one clicked on the globe. The
+          // click flare still plays through `dotScale` on top of the hold.
+          if (selected) {
+            m.dotEntity.billboard.scale = Math.max(dotScale, 1.6)
+            m.dotEntity.billboard.color = CESIUM_HIGHLIGHT.withAlpha(1)
+            return
           }
 
           const baseColor = m.color.withAlpha(alpha)
@@ -281,21 +310,15 @@ export default function Globe({
         }
       }, Cesium.ScreenSpaceEventType.MOUSE_MOVE)
 
-      // Click → flare, fly to country (framed from its bbox), report selection up
+      // Click → flare + report selection up. The camera fly-to lives in the
+      // selection-framing effect, not here, so a marker click and a dropdown
+      // pick share one framing path and never double-fly.
       handler.setInputAction(({ position }) => {
         const picked = viewer.scene.pick(position)
         const code   = picked?.id?.properties?.code?.getValue()
         if (!code || !markerState[code]) return
 
         markerState[code].flareStart = performance.now()
-
-        const geo = markerState[code].geo
-        if (geo && geo.centroid_lon != null && geo.centroid_lat != null) {
-          viewer.camera.flyTo({
-            destination: Cesium.Cartesian3.fromDegrees(geo.centroid_lon, geo.centroid_lat, altitudeFor(geo)),
-            duration: 1.2,
-          })
-        }
 
         onCountrySelectRef.current?.(code)
       }, Cesium.ScreenSpaceEventType.LEFT_CLICK)
@@ -425,6 +448,38 @@ export default function Globe({
       outageState[o.code] = { ringEntity }
     })
   }, [ready, outages])
+
+  // Reactive camera framing: the globe follows the app-wide selection, whatever
+  // set it — a marker click here or the country dropdown in the header. A
+  // selected country is framed from its bbox-derived altitude; clearing the
+  // selection flies back to the whole-globe HOME_VIEW. Keeping framing here
+  // rather than in the click handler means both selection paths share one code
+  // path (no double-fly) and a dropdown pick moves the camera too.
+  useEffect(() => {
+    if (!ready) return
+    const viewer = viewerRef.current
+    if (!viewer || viewer.isDestroyed()) return
+
+    const prev = prevSelectedRef.current
+    prevSelectedRef.current = selectedCode
+
+    if (selectedCode) {
+      const geo = geoByCode[selectedCode]
+      if (!geo || geo.centroid_lon == null || geo.centroid_lat == null) return
+      viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(geo.centroid_lon, geo.centroid_lat, altitudeFor(geo)),
+        duration: 1.2,
+      })
+    } else if (prev) {
+      // A real deselect (not the empty selection on first load) → return to the
+      // whole-globe framing. init already placed the camera at HOME_VIEW at
+      // duration 0, so skipping the `!prev` case keeps startup instant.
+      viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(HOME_VIEW.lon, HOME_VIEW.lat, HOME_VIEW.height),
+        duration: 1.5,
+      })
+    }
+  }, [ready, selectedCode, geoByCode])
 
   return <div ref={containerRef} className="w-full h-full" />
 }

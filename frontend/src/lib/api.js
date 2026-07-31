@@ -59,3 +59,20 @@ export async function getOutages({ country, active } = {}) {
   if (!r.ok) throw new Error('Failed to fetch outages')
   return r.json()
 }
+
+// Per-content-category censorship for a country (OONI web_connectivity
+// aggregated by Citizen Lab category_code), ordered most-censored first.
+export async function getCategories(countryCode) {
+  const r = await fetch(`${BASE}/categories?country=${countryCode}`)
+  if (!r.ok) throw new Error('Failed to fetch categories')
+  return r.json()
+}
+
+// Messaging-app blocking (whatsapp/telegram/facebook_messenger/signal),
+// stored as MESSAGING-category rows in technology_blocks and served by the
+// existing /api/blocking endpoint filtered by layer=MESSAGING.
+export async function getMessaging(countryCode) {
+  const r = await fetch(`${BASE}/blocking?country=${countryCode}&layer=MESSAGING`)
+  if (!r.ok) throw new Error('Failed to fetch messaging status')
+  return r.json()
+}

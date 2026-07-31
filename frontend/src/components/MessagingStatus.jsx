@@ -1,0 +1,78 @@
+import { useEffect, useState } from 'react'
+import { getMessaging } from '../lib/api'
+import { BLOCKING_STATUS_COLOR, BLOCKING_STATUS_LABEL } from '../lib/blockingRegistry'
+import { BORDER, MONO, MUTED, WHITE } from '../theme'
+
+// technology_blocks stores messaging apps under keys; map to display names.
+const APP_LABEL = {
+  whatsapp: 'WhatsApp',
+  telegram: 'Telegram',
+  facebook_messenger: 'Messenger',
+  signal_messenger: 'Signal',
+}
+
+// Order apps consistently regardless of DB row order.
+const ORDER = ['whatsapp', 'telegram', 'facebook_messenger', 'signal_messenger']
+
+export default function MessagingStatus({ countryCode }) {
+  const [rows, setRows] = useState(null)
+  const [error, setError] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    setRows(null)
+    setError(false)
+
+    getMessaging(countryCode)
+      .then((data) => {
+        if (!cancelled) setRows(data)
+      })
+      .catch(() => {
+        if (!cancelled) setError(true)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [countryCode])
+
+  if (error || !rows) return null
+
+  const byApp = Object.fromEntries(rows.map((r) => [r.technology, r]))
+  const shown = ORDER.map((key) => byApp[key]).filter((r) => r && r.measurement_count > 0)
+
+  if (shown.length === 0) return null
+
+  return (
+    <section>
+      <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.1em', color: MUTED, marginBottom: 8 }}>
+        MESSAGING APPS
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {shown.map((r) => {
+          const color = BLOCKING_STATUS_COLOR[r.status] ?? BORDER
+          return (
+            <div
+              key={r.technology}
+              title={`${r.measurement_count} OONI ${r.technology} measurements`}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                border: `1px solid ${color}`,
+                padding: '3px 7px',
+              }}
+            >
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: color, flexShrink: 0 }} />
+              <span style={{ fontSize: 10, color: WHITE }}>{APP_LABEL[r.technology] ?? r.technology}</span>
+              <span style={{ fontFamily: MONO, fontSize: 8, color, letterSpacing: '0.05em' }}>
+                {BLOCKING_STATUS_LABEL[r.status] ?? r.status}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+    </section>
+  )
+}

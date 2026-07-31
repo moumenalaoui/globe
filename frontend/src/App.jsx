@@ -309,6 +309,7 @@ export default function App() {
             onCountrySelect={setSelectedCode}
             onLoadError={setGlobeError}
             layer={layer}
+            selectedCode={selectedCode}
           />
 
           <BlockingHeatmap countries={countries} rows={blocking} />

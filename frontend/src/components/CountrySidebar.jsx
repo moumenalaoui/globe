@@ -1,6 +1,8 @@
 import { Fragment, useEffect, useState } from 'react'
+import CategoryBreakdown from './CategoryBreakdown'
 import DealsChart from './DealsChart'
 import FreedomHouseChart from './FreedomHouseChart'
+import MessagingStatus from './MessagingStatus'
 import ModelLandscapeChart from './ModelLandscapeChart'
 import OutageTimeline from './OutageTimeline'
 import TimelineChart from './TimelineChart'
@@ -217,6 +219,10 @@ export default function CountrySidebar({ country, layer, onClose }) {
             ))}
           </section>
         )}
+
+        <MessagingStatus countryCode={country.country_code} />
+
+        <CategoryBreakdown countryCode={country.country_code} />
 
         <OutageTimeline countryCode={country.country_code} />
 
