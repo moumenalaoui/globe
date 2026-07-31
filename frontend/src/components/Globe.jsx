@@ -189,6 +189,11 @@ export default function Globe({
         infoBox:              false,
         selectionIndicator:   false,
         creditContainer:      Object.assign(document.createElement('div'), { style: 'display:none' }),
+        // Render at the display's native devicePixelRatio instead of Cesium's
+        // default 1x CSS-pixel resolution — the globe rendered soft/low-res on
+        // HiDPI (Retina) screens, most visibly when zoomed out. MSAA is already
+        // 4x by default, so this is purely a pixel-density fix.
+        useBrowserRecommendedResolution: false,
       })
 
       // Bail out if this effect was cleaned up (e.g. React StrictMode
