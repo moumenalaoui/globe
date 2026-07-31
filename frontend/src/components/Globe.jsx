@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import * as Cesium from 'cesium'
 import * as topojson from 'topojson-client'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
-import { BLACK, CRIMSON, DIM, HIGHLIGHT } from '../theme'
+import { BLACK, CRIMSON, CYAN, DIM } from '../theme'
 import { BLOCKING_STATUS_COLOR } from '../lib/blockingRegistry'
 
 // Read from the environment rather than inlined here: anything in this file
@@ -43,7 +43,7 @@ const CESIUM_STATUS_COLOR = Object.fromEntries(
 )
 const CESIUM_DIM = Cesium.Color.fromCssColorString(DIM)
 const CESIUM_CRIMSON = Cesium.Color.fromCssColorString(CRIMSON)
-const CESIUM_HIGHLIGHT = Cesium.Color.fromCssColorString(HIGHLIGHT)
+const CESIUM_CYAN = Cesium.Color.fromCssColorString(CYAN)
 
 // Choropleth ramp for the composite censorship index (0 = free → 100 = most
 // censored): green → amber → crimson. Local constants so this doesn't depend on
@@ -201,8 +201,17 @@ export default function Globe({
 
       viewer.scene.globe.enableLighting = false
       viewer.scene.globe.baseColor = Cesium.Color.BLACK
-      viewer.scene.globe.showGroundAtmosphere = false
-      viewer.scene.skyAtmosphere.show = false
+      // A faint, desaturated limb so the sphere reads as a sphere against the
+      // black star field instead of a flat void. The rim is sun-relative (so
+      // slightly brighter on one side) and pulled dim/desaturated toward slate
+      // to stay in the intel palette rather than looking like a bright blue
+      // Earth. brightnessShift/saturationShift ∈ [-1,1]; atmosphereLightIntensity
+      // default is 50.
+      viewer.scene.globe.showGroundAtmosphere = true
+      viewer.scene.skyAtmosphere.show = true
+      viewer.scene.skyAtmosphere.brightnessShift = -0.5
+      viewer.scene.skyAtmosphere.saturationShift = -0.35
+      viewer.scene.skyAtmosphere.atmosphereLightIntensity = 5
       viewer.scene.backgroundColor = Cesium.Color.fromCssColorString(BLACK)
       viewer.scene.sun.show  = false
       viewer.scene.moon.show = false
@@ -230,9 +239,11 @@ export default function Globe({
         const positions = coords.map(([lng, lat]) => Cesium.Cartesian3.fromDegrees(lng, lat, 2000))
         outlineCollection.add({
           positions,
-          width: 0.5,
+          width: 1.2,
           material: Cesium.Material.fromType('Color', {
-            color: Cesium.Color.fromCssColorString('#ffffff').withAlpha(0.15),
+            // Cool slate-white at ~2.3:1 on black — legible without the harsh
+            // full-white hairline. Was #ffffff @ 0.15 (~1.3:1), sub-pixel.
+            color: Cesium.Color.fromCssColorString('#9db4c9').withAlpha(0.3),
           }),
         })
       }
@@ -262,9 +273,11 @@ export default function Globe({
           if (m.ringEntity) {
             if (selected) {
               // Held bright and enlarged instead of the fading pulse, so the
-              // selected country reads as the persistent focus.
+              // selected country reads as the persistent focus. Cyan (the
+              // interactive/HUD accent) keeps selection distinct from the amber
+              // "likely blocked" status it used to collide with as gold.
               m.ringEntity.billboard.scale = 1.6
-              m.ringEntity.billboard.color = CESIUM_HIGHLIGHT.withAlpha(0.9)
+              m.ringEntity.billboard.color = CESIUM_CYAN.withAlpha(0.9)
             } else {
               m.ringEntity.billboard.scale = 1 + 0.4 * cycle
               m.ringEntity.billboard.color = m.color.withAlpha((1 - cycle) * alpha)
@@ -282,13 +295,13 @@ export default function Globe({
             }
           }
 
-          // Selection takes precedence over hover: hold the picked marker gold
+          // Selection takes precedence over hover: hold the picked marker cyan
           // and enlarged so a country chosen from the dropdown (which never
           // flares) stands out just as clearly as one clicked on the globe. The
           // click flare still plays through `dotScale` on top of the hold.
           if (selected) {
             m.dotEntity.billboard.scale = Math.max(dotScale, 1.6)
-            m.dotEntity.billboard.color = CESIUM_HIGHLIGHT.withAlpha(1)
+            m.dotEntity.billboard.color = CESIUM_CYAN.withAlpha(1)
             return
           }
 
@@ -403,7 +416,11 @@ export default function Globe({
       const hex = BLOCKING_STATUS_COLOR[status] ?? DIM
       const color = cesiumColorFor(status)
       const inconclusive = isInconclusive(status)
-      const position = Cesium.Cartesian3.fromDegrees(geo.centroid_lon, geo.centroid_lat)
+      // Lifted above the choropleth (600) and border (2000) layers so a
+      // near-side marker still sits on top of them, while depth testing (the
+      // billboards below no longer disable it) lets the globe occlude the far
+      // hemisphere instead of markers bleeding through the black sphere.
+      const position = Cesium.Cartesian3.fromDegrees(geo.centroid_lon, geo.centroid_lat, 6000)
 
       let ringEntity = null
       if (!inconclusive) {
@@ -415,7 +432,6 @@ export default function Globe({
             width: 24,
             height: 24,
             color,
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
         })
       }
@@ -428,7 +444,6 @@ export default function Globe({
           width: inconclusive ? 6 : 10,
           height: inconclusive ? 6 : 10,
           color,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
       })
 
@@ -460,7 +475,10 @@ export default function Globe({
 
     outages.forEach((o) => {
       if (o.lat == null || o.lon == null) return
-      const position = Cesium.Cartesian3.fromDegrees(o.lon, o.lat)
+      // Same 6000 m lift + depth testing as the blocking markers, so a live
+      // outage ping on the far side is occluded by the globe rather than
+      // showing through it.
+      const position = Cesium.Cartesian3.fromDegrees(o.lon, o.lat, 6000)
       const ringEntity = viewer.entities.add({
         position,
         properties: { outage: true },
@@ -469,7 +487,6 @@ export default function Globe({
           width: 28,
           height: 28,
           color: CESIUM_CRIMSON,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
       })
       outageState[o.code] = { ringEntity }

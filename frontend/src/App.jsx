@@ -275,6 +275,19 @@ export default function App() {
             selectedCode={selectedCode}
           />
 
+          {/* Vignette: darkens the globe-area corners to focus the eye and add
+              depth, without touching the docked chrome — it lives inside <main>,
+              beneath the zIndex-5 overlay panels, and is click-through. */}
+          <div
+            aria-hidden="true"
+            style={{
+              position: 'absolute',
+              inset: 0,
+              pointerEvents: 'none',
+              background: 'radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(0,0,0,0.4) 100%)',
+            }}
+          />
+
           <BlockingHeatmap countries={countries} rows={blocking} />
 
           <OutageFeed outages={outages} />
