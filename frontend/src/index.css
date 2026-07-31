@@ -12,10 +12,11 @@ body,
 
 body {
   margin: 0;
-  background: #000000;
+  background: #080b11;
   color: #e6e9ef;
   font-family: 'Inter', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 h1,
@@ -35,4 +36,36 @@ p {
 
 .h-full {
   height: 100%;
+}
+
+/* Tabular numerals for data readouts (clock, counters, coordinates) so digits
+   hold their column and don't jitter as values tick. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+/* Thin, dark instrument-style scrollbars. Hex values mirror the BORDER /
+   BORDER_STRONG tokens in theme.js (kept literal here since this is plain CSS
+   outside the JS module). */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2b3a4b transparent;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1b2531;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #2b3a4b;
 }

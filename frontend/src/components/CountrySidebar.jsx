@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState } from 'react'
 import CategoryBreakdown from './CategoryBreakdown'
 import DealsChart from './DealsChart'
 import FreedomHouseChart from './FreedomHouseChart'
+import GlobalIndices from './GlobalIndices'
 import MessagingStatus from './MessagingStatus'
 import ModelLandscapeChart from './ModelLandscapeChart'
 import OutageTimeline from './OutageTimeline'
@@ -227,6 +228,8 @@ export default function CountrySidebar({ country, layer, onClose }) {
         <OutageTimeline countryCode={country.country_code} />
 
         <FreedomHouseChart countryCode={country.country_code} countryName={country.country_name} />
+
+        <GlobalIndices countryCode={country.country_code} />
 
         <section>
           <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.1em', color: MUTED, marginBottom: 8 }}>
