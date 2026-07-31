@@ -13,7 +13,7 @@ const BRIDGE_ENDPOINT: &str = "https://metrics.torproject.org/userstats-bridge-c
 const START_DATE: &str = "2024-01-01";
 const END_DATE: &str = "2026-07-05";
 
-const USER_AGENT: &str = "SCSP-MENA-AI-Workbench/1.0 (research; contact: research@scsp.ai)";
+const USER_AGENT: &str = "Censorship Tracker";
 
 // A small, polite gap between the 10 requests (5 countries x relay+bridge)
 // so we don't fire a burst at an API we have no rate-limit data on.
@@ -245,4 +245,3 @@ fn insert_tor_metric(
     )?;
     Ok(())
 }
-

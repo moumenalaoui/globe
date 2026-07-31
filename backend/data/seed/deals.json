@@ -1,0 +1,86 @@
+[
+  {
+    "deal_id": "ae-microsoft-g42-2024",
+    "country_code": "AE",
+    "partner_type": "US_HYPERSCALER",
+    "partner_name": "Microsoft / G42",
+    "deal_date": "2024-04-16",
+    "deal_type": "INVESTMENT",
+    "description": "US$1.5bn investment by Microsoft in G42, paired with a commitment to run G42 workloads on Azure and an intergovernmental assurance framework covering security and technology controls.",
+    "stack_layer": "CLOUD",
+    "confidence": "HIGH",
+    "source_notes": "Widely reported and confirmed by both parties at announcement. The assurance framework is the substantive part for this tool: it made a US cloud commitment conditional on security undertakings rather than on commercial terms alone."
+  },
+  {
+    "deal_id": "ae-us-ai-framework-2025",
+    "country_code": "AE",
+    "partner_type": "BILATERAL_GOVERNMENT",
+    "partner_name": "United States - UAE AI cooperation framework",
+    "deal_date": "2025-05-15",
+    "deal_type": "SUPPLY_FRAMEWORK",
+    "description": "Government-to-government framework opening a route to advanced US accelerators under end-use and anti-diversion conditions, rather than through general commercial availability.",
+    "stack_layer": "CHIPS",
+    "confidence": "MEDIUM",
+    "source_notes": "Announced during the May 2025 US Gulf visit. Reported annual chip volumes circulated in press but were not published in full, so quantities are deliberately omitted here. Confidence MEDIUM on date and terms; the existence of the framework is not in doubt."
+  },
+  {
+    "deal_id": "ae-ai-campus-2025",
+    "country_code": "AE",
+    "partner_type": "CONSORTIUM",
+    "partner_name": "Stargate UAE / Abu Dhabi AI campus",
+    "deal_date": "2025-05-22",
+    "deal_type": "INFRASTRUCTURE_BUILD",
+    "description": "Multi-gigawatt AI data centre campus in Abu Dhabi built by a consortium of US technology firms with G42, phased over several years.",
+    "stack_layer": "DATA_CENTER",
+    "confidence": "MEDIUM",
+    "source_notes": "Announced May 2025. Capacity figures describe a phased build-out target rather than delivered capacity; treat headline gigawatt numbers as plans. Confidence MEDIUM on the announcement date and on which consortium members hold firm commitments."
+  },
+  {
+    "deal_id": "sa-humain-launch-2025",
+    "country_code": "SA",
+    "partner_type": "SOVEREIGN_FUND",
+    "partner_name": "Humain (Public Investment Fund)",
+    "deal_date": "2025-05-13",
+    "deal_type": "ENTITY_LAUNCH",
+    "description": "State-backed AI company established under the Public Investment Fund to own national compute capacity, data centre build-out, and Arabic model development.",
+    "stack_layer": "COMPUTE",
+    "confidence": "MEDIUM",
+    "source_notes": "Announced alongside the May 2025 US-Saudi cooperation track. The vehicle matters more than any single procurement: it gives Saudi Arabia a state counterparty for chip and cloud agreements. Confidence MEDIUM on exact date."
+  },
+  {
+    "deal_id": "sa-nvidia-humain-2025",
+    "country_code": "SA",
+    "partner_type": "US_CHIPMAKER",
+    "partner_name": "NVIDIA / Humain",
+    "deal_date": "2025-05-13",
+    "deal_type": "SUPPLY",
+    "description": "Agreement to supply advanced NVIDIA accelerators to Humain for Saudi national AI infrastructure, phased over several years.",
+    "stack_layer": "CHIPS",
+    "confidence": "MEDIUM",
+    "source_notes": "Announced May 2025. Unit counts and delivery schedules were reported but not contractually published, and remain subject to US export licensing, so quantities are omitted. Confidence MEDIUM."
+  },
+  {
+    "deal_id": "sa-amd-humain-2025",
+    "country_code": "SA",
+    "partner_type": "US_CHIPMAKER",
+    "partner_name": "AMD / Humain",
+    "deal_date": "2025-05-13",
+    "deal_type": "PARTNERSHIP",
+    "description": "Partnership covering AMD accelerator supply and joint build-out of AI compute capacity for Saudi national infrastructure.",
+    "stack_layer": "CHIPS",
+    "confidence": "MEDIUM",
+    "source_notes": "Announced May 2025. Included because single-vendor framing understates the picture: Gulf compute programmes have deliberately contracted with more than one US accelerator vendor. Confidence MEDIUM on scale and timing."
+  },
+  {
+    "deal_id": "sa-aws-ai-zone-2025",
+    "country_code": "SA",
+    "partner_type": "US_HYPERSCALER",
+    "partner_name": "AWS / Saudi Arabia",
+    "deal_date": "2025-05-13",
+    "deal_type": "INVESTMENT",
+    "description": "Multi-billion-dollar AWS commitment to in-country AI and cloud infrastructure, extending existing Saudi region capacity.",
+    "stack_layer": "CLOUD",
+    "confidence": "MEDIUM",
+    "source_notes": "Announced May 2025. Headline investment figures are company-stated commitments over unspecified periods rather than deployed capital. Confidence MEDIUM."
+  }
+]

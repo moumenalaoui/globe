@@ -1,0 +1,74 @@
+[
+  {
+    "signal_id": "seed-ir-open-weight-default",
+    "country_code": "IR",
+    "provider": "Mixed open-weight",
+    "model_or_service": "Open-weight model families",
+    "user_segment": "TECHNICAL_PRACTITIONER",
+    "signal_type": "ADOPTION_POSTURE",
+    "value_text": "With US managed APIs unavailable under sanctions, self-hosted open-weight models are the only path that does not depend on a foreign provider relationship. Chinese-origin weights dominate the accessible set on licence and capability grounds.",
+    "signal_date": "2025-01-20",
+    "confidence": "MEDIUM",
+    "source_notes": "Structural inference from the sanctions posture in countries.json and the licence terms in models.json, not a usage measurement. Dated to the DeepSeek-R1 release, which materially changed what was available under a permissive licence."
+  },
+  {
+    "signal_id": "seed-ir-circumvention-dependency",
+    "country_code": "IR",
+    "provider": "N/A",
+    "model_or_service": "Managed AI providers generally",
+    "user_segment": "GENERAL_USER",
+    "signal_type": "ACCESS_DEPENDENCY",
+    "value_text": "Any managed AI access is mediated by circumvention infrastructure, making it contingent on censorship conditions rather than on provider terms alone.",
+    "signal_date": "2025-01-01",
+    "confidence": "MEDIUM",
+    "source_notes": "Qualitative framing only. The measured version of this signal is produced at runtime by the OONI and Tor Metrics fetchers into technology_blocks, blocking_timeline, and tor_metrics; this row records the structural claim, not the measurement."
+  },
+  {
+    "signal_id": "seed-sy-payment-friction",
+    "country_code": "SY",
+    "provider": "US managed AI providers",
+    "model_or_service": "Managed API access",
+    "user_segment": "ORGANISATION",
+    "signal_type": "ADOPTION_BARRIER",
+    "value_text": "Formal sanctions relief did not restore managed API adoption, because payment rails, KYC checks, and provider geo-blocking were built around the prior posture and lag the legal change.",
+    "signal_date": "2025-07-01",
+    "confidence": "MEDIUM",
+    "source_notes": "Matches the POST_SANCTIONS_LAG reasoning in engine/rules.rs. Dated to the effective date of the revocation order. This is the gap the tool exists to make visible: legal status and practical access are not the same variable."
+  },
+  {
+    "signal_id": "seed-ae-sovereign-model",
+    "country_code": "AE",
+    "provider": "Inception (G42)",
+    "model_or_service": "Jais",
+    "user_segment": "GOVERNMENT",
+    "signal_type": "SOVEREIGN_CAPABILITY",
+    "value_text": "A state-linked entity publishes an Arabic-first open-weight model family, giving the UAE a domestic option that does not require a foreign provider relationship even while it sits inside the US compute stack.",
+    "signal_date": "2023-11-08",
+    "confidence": "MEDIUM",
+    "source_notes": "Corresponds to the jais-30b row in models.json. Confidence MEDIUM on the date, matching that row. Illustrates the model-layer hedging that engine/rules.rs describes for US_COMPUTE_STACK countries."
+  },
+  {
+    "signal_id": "seed-sa-state-compute-vehicle",
+    "country_code": "SA",
+    "provider": "Humain (Public Investment Fund)",
+    "model_or_service": "National AI compute programme",
+    "user_segment": "GOVERNMENT",
+    "signal_type": "SOVEREIGN_CAPABILITY",
+    "value_text": "A state-owned vehicle now holds national compute procurement, giving Saudi Arabia a single counterparty for accelerator and cloud agreements rather than fragmented ministry-level buying.",
+    "signal_date": "2025-05-13",
+    "confidence": "MEDIUM",
+    "source_notes": "Corresponds to the sa-humain-launch-2025 row in deals.json. Confidence MEDIUM on exact date."
+  },
+  {
+    "signal_id": "seed-iq-no-bilateral-pathway",
+    "country_code": "IQ",
+    "provider": "N/A",
+    "model_or_service": "Bilateral compute arrangements",
+    "user_segment": "GOVERNMENT",
+    "signal_type": "ADOPTION_BARRIER",
+    "value_text": "No bilateral compute pathway comparable to the Gulf arrangements exists. Small open-weight models on locally-owned hardware are the only route that avoids both cost and payment friction.",
+    "signal_date": "2025-05-15",
+    "confidence": "MEDIUM",
+    "source_notes": "Structural inference, not a measurement: the absence of any IQ row in deals.json is itself the evidence. Dated against the Gulf frameworks it is being contrasted with. Matches the RESOURCE_CONSTRAINED reasoning in engine/rules.rs."
+  }
+]

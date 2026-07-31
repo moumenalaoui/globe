@@ -1,0 +1,62 @@
+[
+  {
+    "country_code": "IR",
+    "country_name": "Iran",
+    "sanctions_tier": "COMPREHENSIVELY_SANCTIONED",
+    "us_service_access": "BLOCKED",
+    "cloud_access_notes": "No US hyperscaler region operates in Iran. OFAC's Iran Transactions and Sanctions Regulations prohibit US persons from supplying services, and General License D-2 covers certain personal communications software and services without extending to enterprise cloud or hosted AI inference.",
+    "export_control_notes": "Comprehensive US embargo plus EAR anti-terrorism controls. Advanced accelerators are unavailable through licensed channels; published open-weight model files are not themselves controlled under ECCN 4E091.",
+    "last_major_legal_change": "2022-09-23",
+    "compute_capacity_band": "LOW",
+    "confidence": "HIGH",
+    "source_notes": "Tier assignment matches the COMPREHENSIVELY_SANCTIONED branch in engine/rules.rs and the country_constraints rows in db/seed.rs. last_major_legal_change is the issuance of OFAC General License D-2. Verify against the current OFAC program page before external publication."
+  },
+  {
+    "country_code": "SY",
+    "country_name": "Syria",
+    "sanctions_tier": "POST_SANCTIONS_LAG",
+    "us_service_access": "ALLOWED_WITH_CAVEATS",
+    "cloud_access_notes": "Legal relief has outpaced practical access. Provider-level geo-blocking, card and payment rails, and KYC checks were built around the prior sanctions posture and have not all been updated, so managed AI access remains uneven in practice.",
+    "export_control_notes": "OFAC country-program restrictions were revoked in 2025, but EAR Part 746 licensing requirements persist for controlled items. Open-weight model files remain outside ECCN 4E091 scope.",
+    "last_major_legal_change": "2025-07-01",
+    "compute_capacity_band": "VERY_LOW",
+    "confidence": "MEDIUM",
+    "source_notes": "Tier assignment matches the POST_SANCTIONS_LAG branch in engine/rules.rs, which frames this as the July 2025 revocation EO. Date recorded as the effective date; the order was signed 2025-06-30. Confidence is MEDIUM because practical access is changing faster than any published source tracks."
+  },
+  {
+    "country_code": "AE",
+    "country_name": "United Arab Emirates",
+    "sanctions_tier": "US_COMPUTE_STACK",
+    "us_service_access": "ALLOWED_WITH_CAVEATS",
+    "cloud_access_notes": "In-country regions from multiple US hyperscalers, plus sovereign-hosting arrangements. Data residency does not remove US legal process exposure where the operator is US-headquartered.",
+    "export_control_notes": "Accelerator access runs through a bilateral framework rather than general availability, with government-to-government assurances on end use and diversion. Terms are set per arrangement.",
+    "last_major_legal_change": "2025-05-15",
+    "compute_capacity_band": "HIGH",
+    "confidence": "MEDIUM",
+    "source_notes": "Tier assignment matches the US_COMPUTE_STACK branch in engine/rules.rs. last_major_legal_change is the announcement of the US-UAE AI cooperation framework. Confidence is MEDIUM on the exact date and on chip-volume terms, which were reported in press rather than published in full."
+  },
+  {
+    "country_code": "SA",
+    "country_name": "Saudi Arabia",
+    "sanctions_tier": "US_COMPUTE_STACK",
+    "us_service_access": "ALLOWED_WITH_CAVEATS",
+    "cloud_access_notes": "In-country US hyperscaler capacity and a state-backed national AI vehicle. Sovereign-hosting options exist for sensitive workloads, with the same CLOUD Act exposure as any US-operated infrastructure.",
+    "export_control_notes": "Accelerator access is governed by a bilateral arrangement with end-use conditions rather than by general licence.",
+    "last_major_legal_change": "2025-05-13",
+    "compute_capacity_band": "HIGH",
+    "confidence": "MEDIUM",
+    "source_notes": "Tier assignment matches the US_COMPUTE_STACK branch in engine/rules.rs. last_major_legal_change is the announcement of the US-Saudi AI cooperation track alongside the launch of the state AI company. Confidence is MEDIUM on exact dates and undisclosed commercial terms."
+  },
+  {
+    "country_code": "IQ",
+    "country_name": "Iraq",
+    "sanctions_tier": "RESOURCE_CONSTRAINED",
+    "us_service_access": "ALLOWED_WITH_CAVEATS",
+    "cloud_access_notes": "No country-program sanctions apply and no in-country hyperscaler region exists. Access routes through regional hubs, adding latency and cost, and is shaped more by cross-border payment and procurement friction than by legal prohibition.",
+    "export_control_notes": "No country-program embargo on general-purpose compute. Practical constraints are cost, FX access, and procurement capacity rather than licensing.",
+    "last_major_legal_change": null,
+    "compute_capacity_band": "VERY_LOW",
+    "confidence": "MEDIUM",
+    "source_notes": "Tier assignment matches the RESOURCE_CONSTRAINED branch in engine/rules.rs, which also returns MEDIUM confidence for this tier. No AI-relevant legal change is recorded, which is the substantive point: the constraint here is economic, not legal."
+  }
+]
