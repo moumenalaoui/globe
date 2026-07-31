@@ -2,9 +2,20 @@ use crate::models::{
     country::Country, deal::Deal, deployment::Status, model_release::ModelRelease,
     signal::AdoptionSignal,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use rusqlite::Connection;
 use std::fs;
+
+/// Reads and parses one seed file. Both failure modes name the path — a bare
+/// `No such file or directory` from four different loaders is impossible to
+/// act on, and this one kills startup before the listener binds.
+fn read_seed<T: serde::de::DeserializeOwned>(name: &str) -> Result<Vec<T>> {
+    let path = format!("data/seed/{name}");
+    let data = fs::read_to_string(&path).with_context(|| {
+        format!("could not read seed file `{path}` (the working directory must contain `data/seed/`)")
+    })?;
+    serde_json::from_str(&data).with_context(|| format!("could not parse seed file `{path}`"))
+}
 
 pub fn load_all(conn: &Connection) -> Result<()> {
     conn.execute_batch("BEGIN;")?;
@@ -36,8 +47,7 @@ pub fn load_all(conn: &Connection) -> Result<()> {
 }
 
 fn load_countries(conn: &Connection) -> Result<()> {
-    let data = fs::read_to_string("data/seed/countries.json")?;
-    let rows: Vec<Country> = serde_json::from_str(&data)?;
+    let rows: Vec<Country> = read_seed("countries.json")?;
     for r in rows {
         conn.execute(
             "INSERT OR IGNORE INTO countries VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
@@ -63,8 +73,7 @@ fn load_countries(conn: &Connection) -> Result<()> {
 }
 
 fn load_models(conn: &Connection) -> Result<()> {
-    let data = fs::read_to_string("data/seed/models.json")?;
-    let rows: Vec<ModelRelease> = serde_json::from_str(&data)?;
+    let rows: Vec<ModelRelease> = read_seed("models.json")?;
     for r in rows {
         conn.execute(
             "INSERT OR IGNORE INTO model_releases VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
@@ -93,8 +102,7 @@ fn load_models(conn: &Connection) -> Result<()> {
 }
 
 fn load_deals(conn: &Connection) -> Result<()> {
-    let data = fs::read_to_string("data/seed/deals.json")?;
-    let rows: Vec<Deal> = serde_json::from_str(&data)?;
+    let rows: Vec<Deal> = read_seed("deals.json")?;
     for r in rows {
         conn.execute(
             "INSERT OR IGNORE INTO deals VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
@@ -116,8 +124,7 @@ fn load_deals(conn: &Connection) -> Result<()> {
 }
 
 fn load_signals(conn: &Connection) -> Result<()> {
-    let data = fs::read_to_string("data/seed/signals.json")?;
-    let rows: Vec<AdoptionSignal> = serde_json::from_str(&data)?;
+    let rows: Vec<AdoptionSignal> = read_seed("signals.json")?;
     for r in rows {
         conn.execute(
             "INSERT OR IGNORE INTO adoption_signals VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",

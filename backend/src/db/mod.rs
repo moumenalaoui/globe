@@ -50,11 +50,6 @@ pub async fn run_fetchers(state: &AppState) {
             30,
             crate::fetchers::freedom_house::fetch_and_store(state)
         ),
-        run_with_timeout(
-            "huggingface",
-            30,
-            crate::fetchers::huggingface::fetch_and_store(state)
-        ),
     );
     println!("Background data fetchers finished.");
 }
