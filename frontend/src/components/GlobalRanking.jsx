@@ -72,12 +72,12 @@ export default function GlobalRanking() {
       style={{
         position: 'absolute',
         left: 12,
+        // Expanded: span the full left edge (top-left is now free) so far more
+        // of the ranking shows before scrolling. Collapsed: drop the top anchor
+        // so the box shrinks to just its header instead of a tall empty panel.
+        top: collapsed ? 'auto' : 12,
         bottom: 12,
         width: 264,
-        // Capped to the lower-left so it never overlaps the Regional Blocking
-        // Matrix, which is docked top-left; the full 176-country list stays
-        // reachable by scrolling within the panel.
-        maxHeight: '50vh',
         display: 'flex',
         flexDirection: 'column',
         background: SIDEBAR,
@@ -124,7 +124,7 @@ export default function GlobalRanking() {
 
       {!collapsed && (
         <>
-          <div style={{ overflowY: 'auto' }}>
+          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
             {rows.map((r, i) => {
               const color = scoreColor(r.score_overall)
               return (

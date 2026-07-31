@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import Globe from './components/Globe'
 import CountrySidebar from './components/CountrySidebar'
-import BlockingHeatmap from './components/BlockingHeatmap'
 import OutageFeed from './components/OutageFeed'
 import GlobalRanking from './components/GlobalRanking'
 import IndexLegend from './components/IndexLegend'
@@ -14,9 +13,9 @@ import './App.css'
 
 export default function App() {
   // `countries` and `blocking` are owned here and passed down, rather than
-  // fetched independently by Globe and BlockingHeatmap. Three components
-  // deriving state from the same two responses is what made the app request
-  // /api/countries three times and /api/blocking twice on every load.
+  // fetched independently by the components that derive from them (the globe
+  // markers and the sidebar), which had made the app request /api/countries
+  // and /api/blocking multiple times on every load.
   const [countries, setCountries] = useState([])
   const [blocking, setBlocking] = useState(null)
   const [countriesError, setCountriesError] = useState('')
@@ -26,7 +25,10 @@ export default function App() {
   const [globeError, setGlobeError] = useState('')
   const [isLoadingCountries, setIsLoadingCountries] = useState(true)
   const [isLoadingSelection, setIsLoadingSelection] = useState(false)
-  const [layer, setLayer] = useState('ALL')
+  // Layer is pinned to ALL — the UI shows every category now, so the old
+  // AI-access/circumvention toggle was removed. Kept as a constant the globe
+  // and sidebar still read.
+  const [layer] = useState('ALL')
   const [geo, setGeo] = useState([])
   const [outages, setOutages] = useState([])
   // Composite censorship index (code -> 0–100) driving the globe choropleth,
@@ -256,8 +258,6 @@ export default function App() {
         countries={geo}
         selectedCode={selectedCode}
         onSelectCountry={setSelectedCode}
-        layer={layer}
-        onLayerChange={setLayer}
         counts={counts}
       />
 
@@ -287,8 +287,6 @@ export default function App() {
               background: 'radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(0,0,0,0.4) 100%)',
             }}
           />
-
-          <BlockingHeatmap countries={countries} rows={blocking} />
 
           <OutageFeed outages={outages} />
 

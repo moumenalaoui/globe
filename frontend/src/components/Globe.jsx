@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import * as Cesium from 'cesium'
 import * as topojson from 'topojson-client'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
-import { BLACK, CRIMSON, CYAN, DIM } from '../theme'
+import { BLACK, CRIMSON } from '../theme'
 import { BLOCKING_STATUS_COLOR } from '../lib/blockingRegistry'
 
 // Read from the environment rather than inlined here: anything in this file
@@ -15,35 +15,50 @@ if (ION_TOKEN) {
   Cesium.Ion.defaultAccessToken = ION_TOKEN
 }
 
-const PULSE_PERIOD_MS = 2500
-const FLARE_DURATION_MS = 500
+// The acute layer's only motion: outage blooms breathe in brightness. Alpha
+// only — never geometry — so nothing re-tessellates per frame. Smooth 0→1→0.
+const OUTAGE_PULSE_PERIOD_MS = 1600
 
-// Outage markers pulse faster than the tier markers so a "live disruption"
-// reads as more urgent than the steady baseline presence markers.
-const OUTAGE_PULSE_PERIOD_MS = 1400
+function pulse01(periodMs) {
+  const now = performance.now()
+  return 0.5 - 0.5 * Math.cos(((now % periodMs) / periodMs) * Math.PI * 2)
+}
+
+// Confirmed-blocked bloom radius scales with the composite index (more censored
+// → larger glow) so the acute layer carries hierarchy instead of a uniform
+// field. Outage bloom radius steps with IODA severity. Metres, on the surface.
+function confirmedRadius(index) {
+  const t = index == null ? 0.5 : Math.max(0, Math.min(100, index)) / 100
+  return 130_000 + t * 260_000
+}
+
+function outageRadius(score) {
+  if (score >= 200) return 340_000
+  if (score >= 60) return 240_000
+  return 160_000
+}
 
 // Whole-globe framing, centred on ~20°E/15°N rather than 0/0 so the front
 // hemisphere on load holds Europe, Africa, the Middle East and South Asia — the
 // densest censorship geography — instead of the mid-Atlantic.
 const HOME_VIEW = { lon: 20.0, lat: 15.0, height: 20_000_000 }
 
-// Marker colour is blocking status, full stop. This used to be the country's
-// sanctions tier, which coupled the globe to researched policy data it does not
-// otherwise need, and had two failure modes at scale: an unrecognised tier
-// produced `undefined`, and `Cesium.Color.fromCssColorString(undefined)` throws
-// out of the init path and takes down the *entire* globe render; and a country
-// with no tier at all was silently skipped. Reusing BLOCKING_STATUS_COLOR also
-// means a colour on the globe and the same colour in the sidebar status row are
-// guaranteed to mean the same thing.
-const CESIUM_STATUS_COLOR = Object.fromEntries(
-  Object.entries(BLOCKING_STATUS_COLOR).map(([status, hex]) => [
-    status,
-    Cesium.Color.fromCssColorString(hex),
-  ]),
-)
-const CESIUM_DIM = Cesium.Color.fromCssColorString(DIM)
-const CESIUM_CRIMSON = Cesium.Color.fromCssColorString(CRIMSON)
-const CESIUM_CYAN = Cesium.Color.fromCssColorString(CYAN)
+// The acute layer is crimson, full stop: confirmed blocks and live outages are
+// both "trouble". Reusing the confirmed-blocked status colour keeps a glow on
+// the globe meaning the same thing as the crimson status in the sidebar.
+const ACUTE_HEX = BLOCKING_STATUS_COLOR.CONFIRMED_BLOCKED ?? CRIMSON
+
+// A css rgba() string from a theme hex + alpha, for the radial-gradient canvas
+// textures below.
+function rgbaFrom(hex, alpha) {
+  const c = Cesium.Color.fromCssColorString(hex)
+  return `rgba(${Math.round(c.red * 255)}, ${Math.round(c.green * 255)}, ${Math.round(c.blue * 255)}, ${alpha})`
+}
+
+// Dark-slate land fill so every country reads as land over black ocean, even
+// with no index score. Opaque (the black globe sits beneath it) and a hair
+// below the SIDEBAR chrome tone so land stays subordinate to the panels.
+const LAND_COLOR = Cesium.Color.fromCssColorString('#111823')
 
 // Choropleth ramp for the composite censorship index (0 = free → 100 = most
 // censored): green → amber → crimson. Local constants so this doesn't depend on
@@ -62,51 +77,34 @@ function choroplethColor(censorship) {
   return c.withAlpha(CHORO_ALPHA)
 }
 
-function cesiumColorFor(status) {
-  return CESIUM_STATUS_COLOR[status] ?? CESIUM_DIM
-}
-
-// "Measured, but unresolved" is a real and different state from "blocked" — it
-// gets a small dim point rather than a full pulsing marker, so it reads as
-// present-but-inconclusive instead of competing for attention.
-function isInconclusive(status) {
-  return status === 'INCONCLUSIVE'
-}
-
 // Canvases are cached per (kind, hex) instead of created per country. There are
 // only a handful of distinct statuses, so this is a bounded set no matter how
 // many countries are drawn.
 const canvasCache = new Map()
 
-function ringCanvas(hex) {
-  const key = `ring:${hex}`
+// Soft radial glow (bright core → transparent edge) — the "thermal bloom" that
+// replaces the old dot+ring marker. Painted onto a surface ellipse so it reads
+// as signal radiating off the map rather than a symbol standing on top of it.
+function bloomCanvas(hex) {
+  const key = `bloom:${hex}`
   if (!canvasCache.has(key)) {
-    const size = 64
+    const size = 128
     const canvas = document.createElement('canvas')
     canvas.width = size
     canvas.height = size
     const ctx = canvas.getContext('2d')
-    ctx.strokeStyle = hex
-    ctx.lineWidth = 4
+    const r = size / 2
+    const gradient = ctx.createRadialGradient(r, r, 0, r, r, r)
+    // Hot near-white core → saturated mid → transparent edge. The bright core
+    // keeps the mark legible even over crimson choropleth land, where a plain
+    // crimson glow blended into the globe.
+    gradient.addColorStop(0, 'rgba(255, 241, 224, 0.95)')
+    gradient.addColorStop(0.14, rgbaFrom(hex, 0.92))
+    gradient.addColorStop(0.4, rgbaFrom(hex, 0.4))
+    gradient.addColorStop(1, rgbaFrom(hex, 0))
+    ctx.fillStyle = gradient
     ctx.beginPath()
-    ctx.arc(size / 2, size / 2, size / 2 - 4, 0, Math.PI * 2)
-    ctx.stroke()
-    canvasCache.set(key, canvas)
-  }
-  return canvasCache.get(key)
-}
-
-function dotCanvas(hex) {
-  const key = `dot:${hex}`
-  if (!canvasCache.has(key)) {
-    const size = 32
-    const canvas = document.createElement('canvas')
-    canvas.width = size
-    canvas.height = size
-    const ctx = canvas.getContext('2d')
-    ctx.fillStyle = hex
-    ctx.beginPath()
-    ctx.arc(size / 2, size / 2, size / 2 - 2, 0, Math.PI * 2)
+    ctx.arc(r, r, r, 0, Math.PI * 2)
     ctx.fill()
     canvasCache.set(key, canvas)
   }
@@ -140,6 +138,9 @@ export default function Globe({
 }) {
   const containerRef = useRef(null)
   const viewerRef = useRef(null)
+  // Per-country marker state: a crimson bloom entity for each confirmed-blocked
+  // country (the only visible status marks). Picking is handled by the land
+  // fill, not markers, so there are no invisible pick billboards anymore.
   const markerStateRef = useRef({})
   const outageStateRef = useRef({})
   // Choropleth: the loaded basemap geojson is stashed here in init so the
@@ -147,6 +148,9 @@ export default function Globe({
   // the current fill Primitive is tracked so it can be swapped/removed.
   const geojsonRef = useRef(null)
   const choroplethRef = useRef(null)
+  // Static dark-slate land fill (built once from the basemap geometry); tracked
+  // so it can be torn down with the viewer.
+  const landRef = useRef(null)
   const [ready, setReady] = useState(false)
 
   // Keep the latest callbacks in refs so the init effect (which only runs
@@ -156,21 +160,16 @@ export default function Globe({
   useEffect(() => { onCountrySelectRef.current = onCountrySelect }, [onCountrySelect])
   useEffect(() => { onLoadErrorRef.current = onLoadError }, [onLoadError])
 
-  // The once-created preRender loop reads the selected code through this ref so
-  // it can hold the selected marker highlighted without re-running the init
-  // effect. `prevSelectedRef` lets the framing effect tell a real deselect
-  // (return to the whole-globe view) apart from the empty selection on first
-  // load (which must stay instant, since init already frames HOME_VIEW).
-  const selectedCodeRef = useRef(selectedCode)
+  // `prevSelectedRef` lets the framing effect tell a real deselect (return to
+  // the whole-globe view) apart from the empty selection on first load (which
+  // must stay instant, since init already frames HOME_VIEW).
   const prevSelectedRef = useRef(selectedCode)
-  useEffect(() => { selectedCodeRef.current = selectedCode }, [selectedCode])
 
   useEffect(() => {
     if (!containerRef.current) return
 
     let cancelled = false
     let viewer
-    let removePreRender
 
     const init = async () => {
       viewer = new Cesium.Viewer(containerRef.current, {
@@ -200,17 +199,19 @@ export default function Globe({
       }
 
       viewer.scene.globe.enableLighting = false
-      viewer.scene.globe.baseColor = Cesium.Color.BLACK
-      // A faint, desaturated limb so the sphere reads as a sphere against the
-      // black star field instead of a flat void. The rim is sun-relative (so
-      // slightly brighter on one side) and pulled dim/desaturated toward slate
-      // to stay in the intel palette rather than looking like a bright blue
-      // Earth. brightnessShift/saturationShift ∈ [-1,1]; atmosphereLightIntensity
+      // Ocean = the globe base colour: a dark neutral charcoal, lifted off pure
+      // black so it doesn't read as a dead void, but with no blue tone.
+      viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#121212')
+      // Keep only the sky-atmosphere limb (a thin rim just outside the globe) so
+      // the sphere still reads against space — but drop the ground atmosphere,
+      // which is what tinted the ocean blue. The rim is dimmed and heavily
+      // desaturated toward neutral so it doesn't reintroduce a blue cast.
+      // brightnessShift/saturationShift ∈ [-1,1]; atmosphereLightIntensity
       // default is 50.
-      viewer.scene.globe.showGroundAtmosphere = true
+      viewer.scene.globe.showGroundAtmosphere = false
       viewer.scene.skyAtmosphere.show = true
       viewer.scene.skyAtmosphere.brightnessShift = -0.5
-      viewer.scene.skyAtmosphere.saturationShift = -0.35
+      viewer.scene.skyAtmosphere.saturationShift = -0.7
       viewer.scene.skyAtmosphere.atmosphereLightIntensity = 5
       viewer.scene.backgroundColor = Cesium.Color.fromCssColorString(BLACK)
       viewer.scene.sun.show  = false
@@ -256,110 +257,31 @@ export default function Globe({
         }
       })
 
-      // Markers are built by their own effect, from props — see below. This
-      // effect owns only what the scene needs once: the viewer, the borders,
-      // the animation loop and the input handlers.
-      const markerState = markerStateRef.current
-
-      const preRenderCallback = () => {
-        const now = performance.now()
-        const cycle = (now % PULSE_PERIOD_MS) / PULSE_PERIOD_MS
-
-        Object.entries(markerState).forEach(([code, m]) => {
-          const alpha = m.alpha ?? 1
-          const selected = code === selectedCodeRef.current
-
-          // Inconclusive markers are dot-only, so guard the ring.
-          if (m.ringEntity) {
-            if (selected) {
-              // Held bright and enlarged instead of the fading pulse, so the
-              // selected country reads as the persistent focus. Cyan (the
-              // interactive/HUD accent) keeps selection distinct from the amber
-              // "likely blocked" status it used to collide with as gold.
-              m.ringEntity.billboard.scale = 1.6
-              m.ringEntity.billboard.color = CESIUM_CYAN.withAlpha(0.9)
-            } else {
-              m.ringEntity.billboard.scale = 1 + 0.4 * cycle
-              m.ringEntity.billboard.color = m.color.withAlpha((1 - cycle) * alpha)
-            }
-          }
-
-          let dotScale = 1
-          if (m.flareStart != null) {
-            const elapsed = now - m.flareStart
-            if (elapsed >= FLARE_DURATION_MS) {
-              m.flareStart = null
-            } else {
-              const t = elapsed / FLARE_DURATION_MS
-              dotScale = t < 0.4 ? 1 + 2 * t : 1.8 - (1.8 - 1) * ((t - 0.4) / 0.6)
-            }
-          }
-
-          // Selection takes precedence over hover: hold the picked marker cyan
-          // and enlarged so a country chosen from the dropdown (which never
-          // flares) stands out just as clearly as one clicked on the globe. The
-          // click flare still plays through `dotScale` on top of the hold.
-          if (selected) {
-            m.dotEntity.billboard.scale = Math.max(dotScale, 1.6)
-            m.dotEntity.billboard.color = CESIUM_CYAN.withAlpha(1)
-            return
-          }
-
-          const baseColor = m.color.withAlpha(alpha)
-          m.dotEntity.billboard.scale = dotScale * (m.hovered ? 1.15 : 1)
-          m.dotEntity.billboard.color = m.hovered
-            ? Cesium.Color.clone(baseColor).brighten(0.5, new Cesium.Color())
-            : baseColor
-        })
-
-        // Outage markers: an expanding, fading crimson ring — a radar "ping"
-        // over any country IODA currently reports disrupted. Kept in their own
-        // state object (referenced via the ref, so this once-created closure
-        // still sees rebuilds) and deliberately not clickable.
-        const outageCycle = (now % OUTAGE_PULSE_PERIOD_MS) / OUTAGE_PULSE_PERIOD_MS
-        Object.values(outageStateRef.current).forEach((o) => {
-          o.ringEntity.billboard.scale = 0.8 + 1.4 * outageCycle
-          o.ringEntity.billboard.color = CESIUM_CRIMSON.withAlpha((1 - outageCycle) * 0.9)
-        })
-      }
-
-      viewer.scene.preRender.addEventListener(preRenderCallback)
-      removePreRender = () => viewer.scene.preRender.removeEventListener(preRenderCallback)
-
-      // Hover effect
+      // Markers and blooms are built by their own effects, from props — see
+      // below. Init owns only what the scene needs once: the viewer, the borders
+      // and the input handlers. There is deliberately no per-frame animation
+      // loop — the only moving part (outage bloom alpha) animates itself through
+      // CallbackProperty, so there's nothing to tear down.
       const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas)
-      let hoveredCode = null
+
+      // Resolve a country code from a pick: the land-fill polygons carry the code
+      // directly as their GeometryInstance id (a string), and the crimson blooms
+      // carry it in entity properties. Clicking the ocean resolves to nothing.
+      // This is what lets any country — not just signalled ones — be selected
+      // from the globe, matching the header dropdown.
+      const codeFromPick = (picked) =>
+        typeof picked?.id === 'string' ? picked.id : picked?.id?.properties?.code?.getValue()
 
       handler.setInputAction(({ endPosition }) => {
-        const picked = viewer.scene.pick(endPosition)
-        const code   = picked?.id?.properties?.code?.getValue()
-
-        if (code === hoveredCode) return
-
-        if (hoveredCode && markerState[hoveredCode]) {
-          markerState[hoveredCode].hovered = false
-        }
-
-        hoveredCode = code || null
-
-        if (hoveredCode && markerState[hoveredCode]) {
-          markerState[hoveredCode].hovered = true
-          viewer.scene.canvas.style.cursor = 'pointer'
-        } else {
-          viewer.scene.canvas.style.cursor = 'default'
-        }
+        const code = codeFromPick(viewer.scene.pick(endPosition))
+        viewer.scene.canvas.style.cursor = code ? 'pointer' : 'default'
       }, Cesium.ScreenSpaceEventType.MOUSE_MOVE)
 
-      // Click → flare + report selection up. The camera fly-to lives in the
-      // selection-framing effect, not here, so a marker click and a dropdown
-      // pick share one framing path and never double-fly.
+      // Click → report selection up. The camera fly-to lives in the selection-
+      // framing effect so click and dropdown share one framing path.
       handler.setInputAction(({ position }) => {
-        const picked = viewer.scene.pick(position)
-        const code   = picked?.id?.properties?.code?.getValue()
-        if (!code || !markerState[code]) return
-
-        markerState[code].flareStart = performance.now()
-
+        const code = codeFromPick(viewer.scene.pick(position))
+        if (!code) return
         onCountrySelectRef.current?.(code)
       }, Cesium.ScreenSpaceEventType.LEFT_CLICK)
 
@@ -373,7 +295,6 @@ export default function Globe({
 
     return () => {
       cancelled = true
-      removePreRender?.()
       if (viewer && !viewer.isDestroyed()) {
         viewer.destroy()
       }
@@ -383,81 +304,52 @@ export default function Globe({
     }
   }, [])
 
-  // Markers, rebuilt whenever the data or active layer changes. Driven by
-  // `blockingByCode` (which countries have a signal, and what it is) positioned
-  // via `geoByCode` centroids — so this scales to every country the moment its
-  // measurements land, with no hardcoded roster. Rebuilding on `layer` change
-  // is what recolours/reshapes markers for the selected layer.
+  // Acute status layer, rebuilt when the data or active layer changes. Only
+  // CONFIRMED blocks get a visible mark — a crimson surface bloom; everything
+  // else (likely, accessible, inconclusive) is carried by the choropleth, so
+  // the globe stops being a field of identical stickers. Picking is handled by
+  // the land fill below, so no marker is needed just to make a country clickable.
   useEffect(() => {
     if (!ready) return
     const viewer = viewerRef.current
     if (!viewer || viewer.isDestroyed()) return
 
     const markerState = markerStateRef.current
-
-    // Mutated in place rather than reassigned: the input handlers in the scene
-    // effect close over this same object.
     for (const [code, m] of Object.entries(markerState)) {
-      if (m.ringEntity) viewer.entities.remove(m.ringEntity)
-      if (m.dotEntity) viewer.entities.remove(m.dotEntity)
+      if (m.bloomEntity) viewer.entities.remove(m.bloomEntity)
       delete markerState[code]
     }
 
     for (const [code, entry] of Object.entries(blockingByCode)) {
-      const status = entry?.[layer] ?? 'NO_DATA'
-      // No marker for countries with no signal in the active layer — the
-      // outline is enough, and a marker per no-data country would bury the
-      // ones that mean something.
-      if (status === 'NO_DATA') continue
+      if ((entry?.[layer] ?? 'NO_DATA') !== 'CONFIRMED_BLOCKED') continue
 
       const geo = geoByCode[code]
       if (!geo || geo.centroid_lon == null || geo.centroid_lat == null) continue
 
-      const hex = BLOCKING_STATUS_COLOR[status] ?? DIM
-      const color = cesiumColorFor(status)
-      const inconclusive = isInconclusive(status)
-      // Lifted above the choropleth (600) and border (2000) layers so a
-      // near-side marker still sits on top of them, while depth testing (the
-      // billboards below no longer disable it) lets the globe occlude the far
-      // hemisphere instead of markers bleeding through the black sphere.
-      const position = Cesium.Cartesian3.fromDegrees(geo.centroid_lon, geo.centroid_lat, 6000)
-
-      let ringEntity = null
-      if (!inconclusive) {
-        ringEntity = viewer.entities.add({
-          position,
-          properties: { code },
-          billboard: {
-            image: ringCanvas(hex),
-            width: 24,
-            height: 24,
-            color,
-          },
-        })
-      }
-
-      const dotEntity = viewer.entities.add({
-        position,
+      // A steady crimson surface bloom, sized by the composite index for
+      // hierarchy. Sits at 3000 m and hugs the surface, so it reads as signal
+      // radiating off the country rather than a pin standing on it. Full-alpha
+      // material lets the hot core carry the brightness, and it carries the
+      // country code so clicking the bloom selects, just like clicking the land.
+      const radius = confirmedRadius(indexByCode[code])
+      const bloomEntity = viewer.entities.add({
+        position: Cesium.Cartesian3.fromDegrees(geo.centroid_lon, geo.centroid_lat),
         properties: { code },
-        billboard: {
-          image: dotCanvas(hex),
-          width: inconclusive ? 6 : 10,
-          height: inconclusive ? 6 : 10,
-          color,
+        ellipse: {
+          semiMajorAxis: radius,
+          semiMinorAxis: radius,
+          height: 3000,
+          material: new Cesium.ImageMaterialProperty({
+            image: bloomCanvas(ACUTE_HEX),
+            transparent: true,
+            color: Cesium.Color.WHITE,
+          }),
         },
       })
 
-      markerState[code] = {
-        ringEntity,
-        dotEntity,
-        color,
-        alpha: inconclusive ? 0.55 : 1,
-        hovered: false,
-        flareStart: null,
-        geo,
-      }
+      markerState[code] = { bloomEntity }
     }
-  }, [ready, blockingByCode, geoByCode, layer])
+  }, [ready, blockingByCode, geoByCode, indexByCode, layer])
 
   // Global internet-outage overlay, rebuilt whenever the active-outage set
   // changes. Independent of the blocking markers so it can light up any country
@@ -469,29 +361,100 @@ export default function Globe({
 
     const outageState = outageStateRef.current
     for (const [code, o] of Object.entries(outageState)) {
-      viewer.entities.remove(o.ringEntity)
+      viewer.entities.remove(o.bloomEntity)
       delete outageState[code]
     }
 
     outages.forEach((o) => {
       if (o.lat == null || o.lon == null) return
-      // Same 6000 m lift + depth testing as the blocking markers, so a live
-      // outage ping on the far side is occluded by the globe rather than
-      // showing through it.
-      const position = Cesium.Cartesian3.fromDegrees(o.lon, o.lat, 6000)
-      const ringEntity = viewer.entities.add({
-        position,
-        properties: { outage: true },
-        billboard: {
-          image: ringCanvas(CRIMSON),
-          width: 28,
-          height: 28,
-          color: CESIUM_CRIMSON,
+      // A crimson surface bloom whose brightness breathes — the only motion on
+      // the map, marking a LIVE disruption. Only the material alpha animates
+      // (via CallbackProperty), never the ellipse size, so the geometry is
+      // never re-tessellated. Surface-hugging + depth-tested, so the far side
+      // is occluded by the globe like everything else.
+      const radius = outageRadius(o.maxScore)
+      const bloomEntity = viewer.entities.add({
+        position: Cesium.Cartesian3.fromDegrees(o.lon, o.lat),
+        properties: { code: o.code },
+        ellipse: {
+          semiMajorAxis: radius,
+          semiMinorAxis: radius,
+          height: 3000,
+          material: new Cesium.ImageMaterialProperty({
+            image: bloomCanvas(CRIMSON),
+            transparent: true,
+            color: new Cesium.CallbackProperty(
+              () => Cesium.Color.WHITE.withAlpha(0.3 + 0.55 * pulse01(OUTAGE_PULSE_PERIOD_MS)),
+              false,
+            ),
+          }),
         },
       })
-      outageState[o.code] = { ringEntity }
+      outageState[o.code] = { bloomEntity }
     })
   }, [ready, outages])
+
+  // Dark-slate land underlay: one flat Primitive filling every country polygon
+  // so land reads as land over the dark ocean, even where we have no index
+  // score. Built at height 250 (beneath the choropleth at 600 and borders at
+  // 2000, which read on top). It doubles as the click target — each polygon
+  // carries its country code as a pick id — so it rebuilds when geoByCode
+  // arrives. `asynchronous` so the whole-world tessellation never blocks first
+  // paint (a brief land pop-in on load is the tradeoff).
+  useEffect(() => {
+    if (!ready) return
+    const viewer = viewerRef.current
+    if (!viewer || viewer.isDestroyed()) return
+    const geojson = geojsonRef.current
+    if (!geojson) return
+
+    // basemap features are keyed by ISO numeric; map to our alpha-2 codes so
+    // each land polygon can carry its country code as a pick id — clicking the
+    // land is what selects a country now (no invisible marker billboards).
+    const numericToCode = new Map()
+    for (const [code, geo] of Object.entries(geoByCode)) {
+      if (geo && geo.iso_numeric != null) numericToCode.set(parseInt(geo.iso_numeric, 10), code)
+    }
+
+    const instances = []
+    const addRing = (ring, code) => {
+      if (!ring || ring.length < 3) return
+      const flat = []
+      for (const [lng, lat] of ring) flat.push(lng, lat)
+      instances.push(new Cesium.GeometryInstance({
+        id: code, // string country code → scene.pick returns it directly
+        geometry: new Cesium.PolygonGeometry({
+          polygonHierarchy: new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(flat)),
+          height: 250, // below choropleth (600) and borders (2000)
+          vertexFormat: Cesium.PerInstanceColorAppearance.VERTEX_FORMAT,
+        }),
+        attributes: { color: Cesium.ColorGeometryInstanceAttribute.fromColor(LAND_COLOR) },
+      }))
+    }
+
+    for (const feature of geojson.features) {
+      const code = numericToCode.get(parseInt(feature.id, 10))
+      const g = feature.geometry
+      if (g.type === 'Polygon') addRing(g.coordinates[0], code)
+      else if (g.type === 'MultiPolygon') g.coordinates.forEach((poly) => addRing(poly[0], code))
+    }
+
+    if (instances.length === 0) return
+    const primitive = new Cesium.Primitive({
+      geometryInstances: instances,
+      appearance: new Cesium.PerInstanceColorAppearance({ flat: true, translucent: false }),
+      asynchronous: true,
+    })
+    viewer.scene.primitives.add(primitive)
+    landRef.current = primitive
+
+    return () => {
+      if (landRef.current && !viewer.isDestroyed()) {
+        viewer.scene.primitives.remove(landRef.current)
+      }
+      landRef.current = null
+    }
+  }, [ready, geoByCode])
 
   // Composite-index choropleth: fill every country whose score we have, from
   // green (free) to crimson (most censored). Built as a single translucent
@@ -550,6 +513,9 @@ export default function Globe({
       geometryInstances: instances,
       appearance: new Cesium.PerInstanceColorAppearance({ flat: true, translucent: true }),
       asynchronous: false,
+      // Non-pickable so clicks fall through to the land polygons beneath, which
+      // carry the country code — otherwise scored countries couldn't be clicked.
+      allowPicking: false,
     })
     viewer.scene.primitives.add(primitive)
     choroplethRef.current = primitive

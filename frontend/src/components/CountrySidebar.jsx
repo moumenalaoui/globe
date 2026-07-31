@@ -15,33 +15,9 @@ import {
   GROUP_LABELS,
   hasTimeline,
 } from '../lib/blockingRegistry'
-import { BORDER, MONO, MUTED, SIDEBAR, TIER_COLORS, WHITE } from '../theme'
-
-const TIER_LABELS = {
-  COMPREHENSIVELY_SANCTIONED: 'Comprehensively sanctioned',
-  POST_SANCTIONS_LAG: 'Post-sanctions lag',
-  US_COMPUTE_STACK: 'US compute stack',
-  RESOURCE_CONSTRAINED: 'Resource constrained',
-}
+import { BORDER, MONO, MUTED, SIDEBAR, WHITE } from '../theme'
 
 const ALL_TECHNOLOGIES = Object.values(BLOCKING_REGISTRY).flat()
-
-function FieldTag({ color, children }) {
-  return (
-    <span
-      style={{
-        fontFamily: MONO,
-        fontSize: 10,
-        letterSpacing: '0.05em',
-        color,
-        border: `1px solid ${color}`,
-        padding: '2px 6px',
-      }}
-    >
-      {children}
-    </span>
-  )
-}
 
 function BlockSegments({ filledCount, color }) {
   return (
@@ -93,8 +69,6 @@ function BlockingTechRow({ tech, row, countryCode, timelineRows }) {
 export default function CountrySidebar({ country, layer, onClose }) {
   const [blockingRows, setBlockingRows] = useState([])
   const [timelineByTech, setTimelineByTech] = useState({})
-
-  const tierColor = TIER_COLORS[country.sanctions_tier]
 
   useEffect(() => {
     let cancelled = false
@@ -174,19 +148,6 @@ export default function CountrySidebar({ country, layer, onClose }) {
           </button>
         </div>
 
-        {/* The sanctions tier comes from the researched dossier (/api/countries),
-            which only the focus countries have. For every other country selected
-            from the globe/dropdown there's no tier, so the tag is hidden rather
-            than rendered blank. */}
-        {country.sanctions_tier && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-            <FieldTag color={tierColor}>{TIER_LABELS[country.sanctions_tier]}</FieldTag>
-          </div>
-        )}
-
-        <p style={{ marginTop: 12, fontSize: 11, lineHeight: 1.5, color: MUTED }}>
-          This tool tracks how US and Chinese AI strategies are reshaping digital access worldwide, and where infrastructure-level censorship makes that access fragile.
-        </p>
       </div>
 
       <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 18 }}>

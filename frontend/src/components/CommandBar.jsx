@@ -1,38 +1,6 @@
-import { BLACK, BORDER, CRIMSON, CYAN, MONO, MUTED, SANS, SIDEBAR, WHITE } from '../theme'
-
-const LAYER_OPTIONS = [
-  { value: 'AI_ACCESS', label: 'AI ACCESS' },
-  { value: 'CIRCUMVENTION', label: 'CIRCUMVENTION' },
-  { value: 'ALL', label: 'ALL' },
-]
+import { BLACK, BORDER, CRIMSON, MONO, MUTED, SANS, SIDEBAR, WHITE } from '../theme'
 
 const Divider = () => <span style={{ width: 1, height: 22, background: BORDER, flexShrink: 0 }} />
-
-// Interactive layer selector. Active state uses cyan (the interactive accent)
-// so a chosen *data layer* never reads as the gold *geographic selection* the
-// globe uses for the picked country.
-function LayerToggle({ label, active, onClick }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      style={{
-        background: active ? 'rgba(55, 192, 230, 0.08)' : 'transparent',
-        border: `1px solid ${active ? CYAN : BORDER}`,
-        color: active ? CYAN : MUTED,
-        fontFamily: MONO,
-        fontSize: 10,
-        letterSpacing: '0.1em',
-        padding: '4px 10px',
-        borderRadius: 0,
-        cursor: 'pointer',
-      }}
-    >
-      {label}
-    </button>
-  )
-}
 
 function CountrySelect({ value, options, onChange }) {
   return (
@@ -85,7 +53,7 @@ function Stat({ label, value, alert }) {
 // Presentational command bar. Every interactive control is a controlled input
 // driven by props from App — the state and data flow are unchanged from the
 // header this replaces.
-export default function CommandBar({ countries, selectedCode, onSelectCountry, layer, onLayerChange, counts }) {
+export default function CommandBar({ countries, selectedCode, onSelectCountry, counts }) {
   return (
     <header
       style={{
@@ -111,16 +79,6 @@ export default function CommandBar({ countries, selectedCode, onSelectCountry, l
           options={countries.map((c) => ({ value: c.country_code, label: c.country_name }))}
           onChange={onSelectCountry}
         />
-        <div style={{ display: 'flex', gap: 6 }}>
-          {LAYER_OPTIONS.map((option) => (
-            <LayerToggle
-              key={option.value}
-              label={option.label}
-              active={layer === option.value}
-              onClick={() => onLayerChange(option.value)}
-            />
-          ))}
-        </div>
       </div>
 
       <div style={{ marginLeft: 'auto', display: 'flex', gap: 16 }}>
