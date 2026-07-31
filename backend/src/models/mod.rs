@@ -1,4 +1,5 @@
 pub mod blocking_timeline;
+pub mod category_block;
 pub mod country;
 pub mod country_reference;
 pub mod country_score;

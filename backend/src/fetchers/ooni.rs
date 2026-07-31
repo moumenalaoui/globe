@@ -53,6 +53,7 @@ enum TechCategory {
     AiAccess,
     Circumvention,
     PrivacyOs,
+    Messaging,
 }
 
 impl TechCategory {
@@ -61,6 +62,7 @@ impl TechCategory {
             TechCategory::AiAccess => "AI_ACCESS",
             TechCategory::Circumvention => "CIRCUMVENTION",
             TechCategory::PrivacyOs => "PRIVACY_OS",
+            TechCategory::Messaging => "MESSAGING",
         }
     }
 }
@@ -153,6 +155,35 @@ static REGISTRY: &[Technology] = &[
         url: Some("https://tails.boum.org"),
         test_name: "web_connectivity",
     },
+    // Messaging apps, measured via their own dedicated OONI nettests (like
+    // tor/psiphon above — `url: None`). These test whether the app's servers
+    // are reachable, which is a stronger signal than whether its marketing
+    // website loads. `signal_messenger`'s key is distinct from the `signal`
+    // web_connectivity entry above so both can coexist in technology_blocks.
+    Technology {
+        key: "whatsapp",
+        category: TechCategory::Messaging,
+        url: None,
+        test_name: "whatsapp",
+    },
+    Technology {
+        key: "telegram",
+        category: TechCategory::Messaging,
+        url: None,
+        test_name: "telegram",
+    },
+    Technology {
+        key: "facebook_messenger",
+        category: TechCategory::Messaging,
+        url: None,
+        test_name: "facebook_messenger",
+    },
+    Technology {
+        key: "signal_messenger",
+        category: TechCategory::Messaging,
+        url: None,
+        test_name: "signal",
+    },
 ];
 
 // Country/technology pairs to backfill a daily blocking timeline for. Covers
@@ -205,6 +236,16 @@ pub async fn fetch_and_store(state: &AppState) -> Result<()> {
         eprintln!("ooni: timeline fetch failed: {e}");
     }
     Ok(())
+}
+
+/// The per-content-category sweep, run as its own fetcher (see run_fetchers)
+/// rather than as a phase of `fetch_and_store`. It is only one request per
+/// country, but chaining it behind the long technology-block + timeline
+/// sweeps starved it of the shared OONI time budget — as its own concurrent
+/// task with its own timeout it always completes.
+pub async fn fetch_categories(state: &AppState) -> Result<()> {
+    let codes = super::fetch_codes(state)?;
+    fetch_and_store_categories(state, &codes).await
 }
 
 // ── Adoption signal reachability sweep (existing behavior) ────────────────
@@ -488,6 +529,169 @@ fn insert_technology_block(
         ],
     )?;
     Ok(())
+}
+
+// ── Per-content-category censorship sweep ──────────────────────────────────
+
+#[derive(Debug, Deserialize, Default)]
+struct CategoryRow {
+    #[serde(default)]
+    category_code: Option<String>,
+    #[serde(default)]
+    anomaly_count: i64,
+    #[serde(default)]
+    confirmed_count: i64,
+    #[serde(default)]
+    measurement_count: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct CategoryAggResponse {
+    #[serde(default)]
+    result: Vec<CategoryRow>,
+}
+
+/// One aggregation request per country, grouped by Citizen Lab category_code,
+/// records the anomaly rate per content category in `category_blocks`. This is
+/// the "what kinds of content are censored" view — NEWS, HUMR, LGBT, POLR, etc.
+async fn fetch_and_store_categories(state: &AppState, codes: &[String]) -> Result<()> {
+    let client = reqwest::Client::builder()
+        .timeout(REQUEST_TIMEOUT)
+        .build()?;
+
+    for country in codes {
+        match fetch_category_aggregation(&client, country).await {
+            Ok(rows) => {
+                for row in &rows {
+                    let Some(code) = row.category_code.as_deref() else {
+                        continue;
+                    };
+                    if code.is_empty() {
+                        continue;
+                    }
+                    if let Err(e) = insert_category_block(state, country, code, row) {
+                        eprintln!("ooni: failed to store category {code} for {country}: {e}");
+                    }
+                }
+            }
+            Err(e) => eprintln!("ooni: failed to fetch categories for {country}: {e}"),
+        }
+        tokio::time::sleep(REQUEST_PACING).await;
+    }
+    Ok(())
+}
+
+async fn fetch_category_aggregation(
+    client: &reqwest::Client,
+    country: &str,
+) -> Result<Vec<CategoryRow>> {
+    let resp = get_with_retry(
+        client,
+        AGGREGATION_ENDPOINT,
+        &[
+            ("probe_cc", country),
+            ("test_name", "web_connectivity"),
+            ("axis_x", "category_code"),
+            ("since", "2024-01-01"),
+        ],
+    )
+    .await?;
+    Ok(resp.json::<CategoryAggResponse>().await?.result)
+}
+
+/// Categories aggregate hundreds of URLs, most of which stay reachable even
+/// where a topic is heavily targeted, so category anomaly rates run much lower
+/// than a single blocked tool's — these thresholds are tuned to that scale
+/// rather than reusing `classify_technology`'s (which expects one URL).
+fn classify_category(anomaly_rate: f64, measurement_count: i64) -> &'static str {
+    if measurement_count < 100 {
+        "INCONCLUSIVE"
+    } else if anomaly_rate >= 0.20 {
+        "HEAVILY_CENSORED"
+    } else if anomaly_rate >= 0.05 {
+        "PARTIALLY_CENSORED"
+    } else {
+        "ACCESSIBLE"
+    }
+}
+
+fn insert_category_block(
+    state: &AppState,
+    country: &str,
+    category_code: &str,
+    row: &CategoryRow,
+) -> Result<()> {
+    let total = row.measurement_count;
+    let rate = if total > 0 {
+        row.anomaly_count as f64 / total as f64
+    } else {
+        0.0
+    };
+    let status = classify_category(rate, total);
+    let label = category_label(category_code);
+
+    let conn = state
+        .lock()
+        .map_err(|_| anyhow::anyhow!("db lock poisoned"))?;
+    conn.execute(
+        "INSERT OR REPLACE INTO category_blocks
+         (country_code, category_code, category_label, status, anomaly_rate, anomaly_count, confirmed_count, measurement_count, checked_date, source_notes)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+        rusqlite::params![
+            country,
+            category_code,
+            label,
+            status,
+            rate,
+            row.anomaly_count,
+            row.confirmed_count,
+            total,
+            today_iso(),
+            "OONI Aggregation API v1, grouped by Citizen Lab category_code",
+        ],
+    )?;
+    Ok(())
+}
+
+/// Citizen Lab content-category code → human label (their canonical legend,
+/// lists/00-LEGEND-new_category_codes.csv). Unknown codes fall back to the raw
+/// code so a new upstream category is still shown rather than dropped.
+fn category_label(code: &str) -> String {
+    let label = match code {
+        "ALDR" => "Alcohol & Drugs",
+        "REL" => "Religion",
+        "PORN" => "Pornography",
+        "PROV" => "Provocative Attire",
+        "POLR" => "Political Criticism",
+        "HUMR" => "Human Rights",
+        "ENV" => "Environment",
+        "MILX" => "Terrorism & Militants",
+        "HATE" => "Hate Speech",
+        "NEWS" => "News Media",
+        "XED" => "Sex Education",
+        "PUBH" => "Public Health",
+        "GMB" => "Gambling",
+        "ANON" => "Anonymization & Circumvention",
+        "DATE" => "Online Dating",
+        "GRP" => "Social Networking",
+        "LGBT" => "LGBT",
+        "FILE" => "File-sharing",
+        "HACK" => "Hacking Tools",
+        "COMT" => "Communication Tools",
+        "MMED" => "Media Sharing",
+        "HOST" => "Hosting & Blogging",
+        "SRCH" => "Search Engines",
+        "GAME" => "Gaming",
+        "CULTR" => "Culture",
+        "ECON" => "Economics",
+        "GOVT" => "Government",
+        "COMM" => "E-commerce",
+        "CTRL" => "Control Content",
+        "IGO" => "Intergovernmental Orgs",
+        "MISC" => "Miscellaneous",
+        other => other,
+    };
+    label.to_string()
 }
 
 // ── Historical blocking timeline backfill ──────────────────────────────────

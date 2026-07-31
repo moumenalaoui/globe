@@ -64,6 +64,11 @@ pub async fn run_fetchers(state: &AppState) {
     tokio::join!(
         run_with_timeout("ooni", 300, crate::fetchers::ooni::fetch_and_store(state)),
         run_with_timeout(
+            "ooni_categories",
+            180,
+            crate::fetchers::ooni::fetch_categories(state)
+        ),
+        run_with_timeout(
             "tor_metrics",
             120,
             crate::fetchers::tor_metrics::fetch_and_store(state)

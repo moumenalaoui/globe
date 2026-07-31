@@ -47,6 +47,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/evaluate", post(api::evaluate::evaluate))
         .route("/api/signals", get(api::signals::list_signals))
         .route("/api/blocking", get(api::blocking::list_blocking))
+        .route("/api/categories", get(api::categories::list_categories))
         .route("/api/timeline", get(api::timeline::list_timeline))
         .route("/api/tor-metrics", get(api::tor_metrics::list_tor_metrics))
         .route("/api/outages", get(api::outages::list_outages))

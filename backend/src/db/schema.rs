@@ -243,6 +243,26 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
             last_updated  TEXT NOT NULL
         );
 
+        -- Per-content-category censorship for a country, from OONI's
+        -- aggregation API grouped by Citizen Lab category_code (NEWS, HUMR,
+        -- LGBT, POLR, ...). One row per (country, category): the share of
+        -- web_connectivity measurements in that category that came back
+        -- anomalous, with the confirmed-blocked count as corroboration. This is
+        -- the per-category (what kinds of content are censored) view.
+        CREATE TABLE IF NOT EXISTS category_blocks (
+            country_code      TEXT NOT NULL,
+            category_code     TEXT NOT NULL,
+            category_label    TEXT NOT NULL,
+            status            TEXT NOT NULL,
+            anomaly_rate      REAL NOT NULL,
+            anomaly_count     INTEGER NOT NULL,
+            confirmed_count   INTEGER NOT NULL,
+            measurement_count INTEGER NOT NULL,
+            checked_date      TEXT NOT NULL,
+            source_notes      TEXT NOT NULL,
+            PRIMARY KEY (country_code, category_code)
+        );
+
         -- ── Indexes ──────────────────────────────────────────────────────
         --
         -- tor_metrics is keyed on a synthetic `id` ('{country}-{date}'), so
