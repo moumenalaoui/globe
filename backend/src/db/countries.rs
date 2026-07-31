@@ -55,10 +55,9 @@ pub fn all(conn: &Connection) -> Result<Vec<CountryReference>> {
 }
 
 /// Drawable country codes in fetch order: priority tier first, then
-/// alphabetical so the order is stable across runs.
-// Not yet called — consumed when the sweep covers every country rather than
-// just the researched ones.
-#[allow(dead_code)]
+/// alphabetical so the order is stable across runs. This is the whole-globe
+/// sweep list — used by IODA, Cloudflare (via `fetch_codes`), and as the
+/// ordering behind the OONI/Tor bulk sweeps.
 pub fn codes_by_priority(conn: &Connection) -> Result<Vec<String>> {
     let mut stmt = conn.prepare(
         "SELECT country_code FROM country_reference
@@ -71,7 +70,10 @@ pub fn codes_by_priority(conn: &Connection) -> Result<Vec<String>> {
     Ok(rows)
 }
 
-/// The actively-researched countries (`priority_tier = 0`).
+/// The actively-researched countries (`priority_tier = 0`). Retained for the
+/// researched-only surfaces (e.g. the scoring engine); the metric fetchers now
+/// cover the whole globe via `codes_by_priority`/`known_codes`.
+#[allow(dead_code)]
 pub fn focus_codes(conn: &Connection) -> Result<Vec<String>> {
     let mut stmt = conn.prepare(
         "SELECT country_code FROM country_reference
@@ -86,14 +88,28 @@ pub fn focus_codes(conn: &Connection) -> Result<Vec<String>> {
 
 /// Uppercased set of known codes, for validating codes that arrive from
 /// upstream feeds. Bulk responses carry entries outside ISO 3166-1 — the Tor
-/// CSV emits `''`, `'??'`, `'ap'` among others — and those must be dropped
-/// rather than stored as if they were countries.
-// Not yet called — consumed by the bulk-response ingest.
-#[allow(dead_code)]
+/// CSV emits `''`, `'??'`, `'ap'` among others, and OONI aggregations emit
+/// dimensions like `ZZ` — and those must be dropped rather than stored as if
+/// they were countries. Consumed by the OONI and Tor whole-globe sweeps.
 pub fn known_codes(conn: &Connection) -> Result<std::collections::HashSet<String>> {
     let mut stmt = conn.prepare("SELECT country_code FROM country_reference")?;
     let rows = stmt
         .query_map([], |r| r.get::<_, String>(0))?
         .collect::<rusqlite::Result<std::collections::HashSet<_>>>()?;
+    Ok(rows)
+}
+
+/// Uppercased ISO 3166-1 alpha-3 → our alpha-2 `country_code`. Bulk index
+/// feeds (V-Dem, RSF via OWID) key rows on alpha-3, so this translates them
+/// back to the codes the rest of the app uses. Rows with no alpha3 are
+/// skipped rather than mapped to an empty key.
+pub fn alpha3_to_code(conn: &Connection) -> Result<std::collections::HashMap<String, String>> {
+    let mut stmt =
+        conn.prepare("SELECT alpha3, country_code FROM country_reference WHERE alpha3 IS NOT NULL")?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((r.get::<_, String>(0)?.to_uppercase(), r.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<std::collections::HashMap<_, _>>>()?;
     Ok(rows)
 }

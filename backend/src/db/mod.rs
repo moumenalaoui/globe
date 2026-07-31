@@ -84,6 +84,11 @@ pub async fn run_fetchers(state: &AppState) {
             crate::fetchers::freedom_house::fetch_and_store(state)
         ),
         run_with_timeout("ioda", 180, crate::fetchers::ioda::fetch_and_store(state)),
+        run_with_timeout(
+            "indices",
+            60,
+            crate::fetchers::indices::fetch_and_store(state)
+        ),
     );
     println!("Background data fetchers finished.");
 }

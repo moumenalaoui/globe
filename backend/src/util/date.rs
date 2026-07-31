@@ -8,11 +8,8 @@ pub fn today_iso() -> String {
     iso_from_epoch_secs(now_epoch_secs())
 }
 
-/// `n` days before today, UTC, as `YYYY-MM-DD`. Used for the rolling
-/// measurement windows the fetchers request.
-// Not yet called: the rolling-window ingest is a later phase. Kept here
-// (with tests) because it belongs next to the algorithm it shares.
-#[allow(dead_code)]
+/// `n` days before today, UTC, as `YYYY-MM-DD`. Used for the trailing
+/// point-in-time windows the OONI sweeps request (`since`).
 pub fn days_ago_iso(n: i64) -> String {
     iso_from_epoch_secs(now_epoch_secs() - n * 86_400)
 }
@@ -37,8 +34,6 @@ pub fn now_utc_iso() -> String {
 /// That field lands in `blocking_timeline.measurement_date`, which is part of
 /// the primary key, so an unvalidated hourly value multiplies rows instead of
 /// updating them.
-// Not yet called — the guard is wired in with the aggregation-based ingest.
-#[allow(dead_code)]
 pub fn is_iso_date(s: &str) -> bool {
     let b = s.as_bytes();
     b.len() == 10

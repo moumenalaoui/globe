@@ -7,6 +7,7 @@ pub mod geo;
 pub mod evaluate;
 pub mod models;
 pub mod outages;
+pub mod rankings;
 pub mod signals;
 pub mod timeline;
 pub mod tor_metrics;

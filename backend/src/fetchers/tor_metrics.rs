@@ -1,12 +1,13 @@
 use crate::AppState;
-use crate::util::date::today_iso;
 use anyhow::{Result, bail};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 // Tor Metrics exposes CSV downloads, not a REST/JSON API — there is no
 // /api/1.0/ path. `events=off` on the relay endpoint matches the confirmed
-// live URL format.
+// live URL format. Neither request carries a `country` param: omitting it
+// returns every country in one CSV (with a `country` column), so the whole
+// globe is two downloads rather than two-per-country.
 const RELAY_ENDPOINT: &str = "https://metrics.torproject.org/userstats-relay-country.csv";
 const BRIDGE_ENDPOINT: &str = "https://metrics.torproject.org/userstats-bridge-country.csv";
 const START_DATE: &str = "2024-01-01";
@@ -16,38 +17,48 @@ const START_DATE: &str = "2024-01-01";
 // literal, which silently truncated the series at that date and dropped every
 // day that passed afterwards — the window has to move with the clock.
 fn end_date() -> String {
-    today_iso()
+    crate::util::date::today_iso()
 }
 
 const USER_AGENT: &str = "Censorship Tracker";
 
-// A small, polite gap between requests (2 per country: relay + bridge) so we
-// don't fire a burst at an API we have no rate-limit data on.
+// A small, polite gap between the two requests (relay + bridge).
 const REQUEST_PACING: Duration = Duration::from_millis(300);
 
-// Tor Metrics renders these CSVs on demand over a multi-year window, which
-// routinely takes several seconds and has no retry path here — so a timeout is
-// a total loss for that country, not a retryable blip. Sized to tolerate a
-// slow render rather than to fail fast.
+// Tor Metrics renders these CSVs on demand. The whole-globe multi-year window
+// is ~6 MB and comes back in a few seconds, but there's no retry path here, so
+// the ceiling is sized to tolerate a slow render rather than to fail fast.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
-struct RelayRow {
+struct RelayRecord {
+    country: String,
     date: String,
     users: i64,
     lower: Option<i64>,
 }
 
-struct BridgeRow {
+struct BridgeRecord {
+    country: String,
     date: String,
     users: i64,
 }
 
-/// Fetches relay and bridge user-count CSVs per country from Tor Metrics,
-/// joins them by date, and derives a blocking signal. `lower`/`upper` on the
-/// relay CSV are Tor's own anomaly-detection bounds — a user count below
-/// `lower` is a likely censorship event. When `lower` isn't published for a
-/// given day, there's no basis for a HIGH_BLOCKING/LOW call, so that day is
-/// marked INCONCLUSIVE rather than guessed at.
+struct TorRow {
+    id: String,
+    country: String,
+    date: String,
+    relay_users: Option<i64>,
+    bridge_users: Option<i64>,
+    ratio: f64,
+    signal: &'static str,
+}
+
+/// Fetches the relay and bridge user-count CSVs for every country in two
+/// downloads, joins them by (country, date), and derives a blocking signal.
+/// `lower`/`upper` on the relay CSV are Tor's own anomaly-detection bounds — a
+/// user count below `lower` is a likely censorship event. When `lower` isn't
+/// published for a given day, there's no basis for a HIGH_BLOCKING/LOW call, so
+/// that day is marked INCONCLUSIVE rather than guessed at.
 pub async fn fetch_and_store(state: &AppState) -> Result<()> {
     let mut default_headers = reqwest::header::HeaderMap::new();
     default_headers.insert(
@@ -60,59 +71,102 @@ pub async fn fetch_and_store(state: &AppState) -> Result<()> {
         .default_headers(default_headers)
         .build()?;
 
-    for country in &super::fetch_codes(state)? {
-        let relay_rows = match fetch_relay_csv(&client, country).await {
-            Ok(rows) => rows,
-            Err(e) => {
-                eprintln!("tor_metrics: failed to fetch relay CSV for {country}: {e}");
-                Vec::new()
-            }
-        };
-        tokio::time::sleep(REQUEST_PACING).await;
+    // Recognised ISO codes, read once. The relay CSV emits non-country rows —
+    // an empty code for the global total, plus `??`/`ap` and similar — which
+    // must be dropped rather than stored as if they were countries.
+    let known = {
+        let conn = state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("db lock poisoned"))?;
+        crate::db::countries::known_codes(&conn)?
+    };
 
-        let bridge_rows = match fetch_bridge_csv(&client, country).await {
-            Ok(rows) => rows,
-            Err(e) => {
-                eprintln!("tor_metrics: failed to fetch bridge CSV for {country}: {e}");
-                Vec::new()
-            }
-        };
-        tokio::time::sleep(REQUEST_PACING).await;
+    let relay_records = match fetch_relay_csv(&client).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            eprintln!("tor_metrics: failed to fetch relay CSV: {e}");
+            Vec::new()
+        }
+    };
+    tokio::time::sleep(REQUEST_PACING).await;
 
-        let relay_map: HashMap<String, (i64, Option<i64>)> = relay_rows
-            .into_iter()
-            .map(|r| (r.date, (r.users, r.lower)))
-            .collect();
-        let bridge_map: HashMap<String, i64> =
-            bridge_rows.into_iter().map(|r| (r.date, r.users)).collect();
+    let bridge_records = match fetch_bridge_csv(&client).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            eprintln!("tor_metrics: failed to fetch bridge CSV: {e}");
+            Vec::new()
+        }
+    };
 
-        let mut dates: Vec<String> = relay_map.keys().chain(bridge_map.keys()).cloned().collect();
+    // Group by uppercased country, keeping only recognised ISO codes.
+    let mut relay_by_country: HashMap<String, HashMap<String, (i64, Option<i64>)>> = HashMap::new();
+    for r in relay_records {
+        let cc = r.country.to_uppercase();
+        if !known.contains(&cc) {
+            continue;
+        }
+        relay_by_country
+            .entry(cc)
+            .or_default()
+            .insert(r.date, (r.users, r.lower));
+    }
+    let mut bridge_by_country: HashMap<String, HashMap<String, i64>> = HashMap::new();
+    for b in bridge_records {
+        let cc = b.country.to_uppercase();
+        if !known.contains(&cc) {
+            continue;
+        }
+        bridge_by_country.entry(cc).or_default().insert(b.date, b.users);
+    }
+
+    let countries: HashSet<String> = relay_by_country
+        .keys()
+        .chain(bridge_by_country.keys())
+        .cloned()
+        .collect();
+
+    let empty_relay: HashMap<String, (i64, Option<i64>)> = HashMap::new();
+    let empty_bridge: HashMap<String, i64> = HashMap::new();
+
+    let mut rows: Vec<TorRow> = Vec::new();
+    for country in &countries {
+        let relay = relay_by_country.get(country).unwrap_or(&empty_relay);
+        let bridge = bridge_by_country.get(country).unwrap_or(&empty_bridge);
+
+        let mut dates: Vec<String> = relay.keys().chain(bridge.keys()).cloned().collect();
         dates.sort();
         dates.dedup();
 
         for date in dates {
-            let relay_entry = relay_map.get(&date);
+            let relay_entry = relay.get(&date);
             let relay_users = relay_entry.map(|(users, _)| *users);
             let lower = relay_entry.and_then(|(_, lower)| *lower);
-            let bridge_users = bridge_map.get(&date).copied();
-
+            let bridge_users = bridge.get(&date).copied();
             let signal = classify_blocking(relay_users, lower);
+            let ratio = bridge_users.unwrap_or(0) as f64 / (relay_users.unwrap_or(0) as f64 + 1.0);
 
-            if let Err(e) =
-                insert_tor_metric(state, country, &date, relay_users, bridge_users, signal)
-            {
-                eprintln!("tor_metrics: failed to store row for {country} / {date}: {e}");
-            }
+            rows.push(TorRow {
+                id: format!("{country}-{date}"),
+                country: country.clone(),
+                date,
+                relay_users,
+                bridge_users,
+                ratio,
+                signal,
+            });
         }
+    }
+
+    if let Err(e) = insert_tor_metrics(state, &rows) {
+        eprintln!("tor_metrics: failed to store rows: {e}");
     }
 
     Ok(())
 }
 
-async fn fetch_relay_csv(client: &reqwest::Client, country: &str) -> Result<Vec<RelayRow>> {
-    let cc = country.to_lowercase();
+async fn fetch_relay_csv(client: &reqwest::Client) -> Result<Vec<RelayRecord>> {
     let url = format!(
-        "{RELAY_ENDPOINT}?start={START_DATE}&end={}&country={cc}&events=off",
+        "{RELAY_ENDPOINT}?start={START_DATE}&end={}&events=off",
         end_date()
     );
     let body = client
@@ -133,11 +187,13 @@ async fn fetch_relay_csv(client: &reqwest::Client, country: &str) -> Result<Vec<
 
     let headers = reader.headers()?.clone();
     let date_col = find_column(&headers, "date");
+    let country_col = find_column(&headers, "country");
     let users_col = find_column(&headers, "users");
     let lower_col = find_column(&headers, "lower");
 
-    let (Some(date_col), Some(users_col)) = (date_col, users_col) else {
-        bail!("relay CSV missing required date/users columns");
+    let (Some(date_col), Some(country_col), Some(users_col)) = (date_col, country_col, users_col)
+    else {
+        bail!("relay CSV missing required date/country/users columns");
     };
 
     let mut rows = Vec::new();
@@ -150,13 +206,23 @@ async fn fetch_relay_csv(client: &reqwest::Client, country: &str) -> Result<Vec<
         else {
             continue;
         };
+        // Skip the global-total row (empty country) here; the `??`/`ap` style
+        // pseudo-codes survive to the known_codes filter in the caller.
+        let Some(country) = record
+            .get(country_col)
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+        else {
+            continue;
+        };
         let Some(users) = record.get(users_col).and_then(parse_optional_int) else {
             continue;
         };
         let lower = lower_col
             .and_then(|c| record.get(c))
             .and_then(parse_optional_int);
-        rows.push(RelayRow {
+        rows.push(RelayRecord {
+            country: country.to_string(),
             date: date.to_string(),
             users,
             lower,
@@ -165,10 +231,9 @@ async fn fetch_relay_csv(client: &reqwest::Client, country: &str) -> Result<Vec<
     Ok(rows)
 }
 
-async fn fetch_bridge_csv(client: &reqwest::Client, country: &str) -> Result<Vec<BridgeRow>> {
-    let cc = country.to_lowercase();
+async fn fetch_bridge_csv(client: &reqwest::Client) -> Result<Vec<BridgeRecord>> {
     let url = format!(
-        "{BRIDGE_ENDPOINT}?start={START_DATE}&end={}&country={cc}",
+        "{BRIDGE_ENDPOINT}?start={START_DATE}&end={}",
         end_date()
     );
     let body = client
@@ -187,10 +252,12 @@ async fn fetch_bridge_csv(client: &reqwest::Client, country: &str) -> Result<Vec
 
     let headers = reader.headers()?.clone();
     let date_col = find_column(&headers, "date");
+    let country_col = find_column(&headers, "country");
     let users_col = find_column(&headers, "users");
 
-    let (Some(date_col), Some(users_col)) = (date_col, users_col) else {
-        bail!("bridge CSV missing required date/users columns");
+    let (Some(date_col), Some(country_col), Some(users_col)) = (date_col, country_col, users_col)
+    else {
+        bail!("bridge CSV missing required date/country/users columns");
     };
 
     let mut rows = Vec::new();
@@ -203,10 +270,18 @@ async fn fetch_bridge_csv(client: &reqwest::Client, country: &str) -> Result<Vec
         else {
             continue;
         };
+        let Some(country) = record
+            .get(country_col)
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+        else {
+            continue;
+        };
         let Some(users) = record.get(users_col).and_then(parse_optional_int) else {
             continue;
         };
-        rows.push(BridgeRow {
+        rows.push(BridgeRecord {
+            country: country.to_string(),
             date: date.to_string(),
             users,
         });
@@ -242,24 +317,37 @@ fn classify_blocking(users: Option<i64>, lower: Option<i64>) -> &'static str {
     }
 }
 
-fn insert_tor_metric(
-    state: &AppState,
-    country: &str,
-    date: &str,
-    relay_users: Option<i64>,
-    bridge_users: Option<i64>,
-    signal: &str,
-) -> Result<()> {
-    let ratio = bridge_users.unwrap_or(0) as f64 / (relay_users.unwrap_or(0) as f64 + 1.0);
-    let id = format!("{country}-{date}");
-    let conn = state
+/// All rows in a single transaction. At whole-globe scale this is ~150k rows;
+/// inserting them one autocommitted statement at a time (re-locking the DB each
+/// time) is what made a full sweep slow, so they share one prepared statement
+/// and one commit.
+fn insert_tor_metrics(state: &AppState, rows: &[TorRow]) -> Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let mut conn = state
         .lock()
         .map_err(|_| anyhow::anyhow!("db lock poisoned"))?;
-    conn.execute(
-        "INSERT OR REPLACE INTO tor_metrics
-         (id, country_code, date, relay_users, bridge_users, bridge_relay_ratio, blocking_signal, source)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
-        rusqlite::params![id, country, date, relay_users, bridge_users, ratio, signal, "TOR_METRICS"],
-    )?;
+    let tx = conn.transaction()?;
+    {
+        let mut stmt = tx.prepare(
+            "INSERT OR REPLACE INTO tor_metrics
+             (id, country_code, date, relay_users, bridge_users, bridge_relay_ratio, blocking_signal, source)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+        )?;
+        for r in rows {
+            stmt.execute(rusqlite::params![
+                r.id,
+                r.country,
+                r.date,
+                r.relay_users,
+                r.bridge_users,
+                r.ratio,
+                r.signal,
+                "TOR_METRICS",
+            ])?;
+        }
+    }
+    tx.commit()?;
     Ok(())
 }

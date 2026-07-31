@@ -1,7 +1,8 @@
 use crate::AppState;
-use crate::util::date::today_iso;
+use crate::util::date::{days_ago_iso, is_iso_date, today_iso};
 use anyhow::Result;
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::time::Duration;
 
 const MAX_RATE_LIMIT_RETRIES: u32 = 2;
@@ -10,17 +11,30 @@ const MAX_RATE_LIMIT_RETRIES: u32 = 2;
 // concurrently just front-loads a wall of throttling. Every fetch is
 // sequential and paced with this delay between requests — combined with
 // get_with_retry's backoff as a safety net, this stays under the limit
-// instead of tripping it and paying for backoff anyway. Each result is also
-// inserted immediately after its own fetch (rather than batching fetch-all
-// then insert-all) so a startup timeout only loses whatever hadn't been
-// reached yet, not everything fetched so far.
+// instead of tripping it and paying for backoff anyway.
+//
+// Every sweep now groups by country server-side (axis_x/axis_y = probe_cc), so
+// the whole globe is a *handful* of requests per sweep rather than one per
+// country — ~4 URLs + ~16 technologies + ~6 timeline techs + 1 category call.
+// That is what makes covering all ~230 countries fit the startup time budget
+// where a per-country loop (thousands of requests) never could.
 const REQUEST_PACING: Duration = Duration::from_millis(2000);
 
 // Generous on purpose. OONI generates aggregations server-side and a wide
-// window over many days legitimately takes over ten seconds to come back — the
-// previous 10s ceiling was close enough to typical response time to fail
-// intermittently on exactly the largest, most valuable responses.
+// window over every country legitimately takes several seconds to come back —
+// the widest (a web_connectivity timeline for all countries since 2024) is the
+// most valuable response, so the ceiling is sized to tolerate it rather than
+// fail fast on exactly the request that matters most.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+
+// Point-in-time status (technology_blocks, adoption_signals) is "is this
+// blocked *now*", so it classifies from measurements in a trailing window
+// rather than all of history — otherwise a tool blocked once in 2024 would read
+// as blocked forever.
+const POINT_IN_TIME_WINDOW_DAYS: i64 = 90;
+
+// The historical charts start here. Shared by the timeline and category sweeps.
+const TIMELINE_SINCE: &str = "2024-01-01";
 
 const TARGET_URLS: [&str; 4] = [
     "https://api.openai.com",
@@ -29,21 +43,57 @@ const TARGET_URLS: [&str; 4] = [
     "https://www.deepseek.com",
 ];
 
-const MEASUREMENTS_ENDPOINT: &str = "https://api.ooni.io/api/v1/measurements";
 const AGGREGATION_ENDPOINT: &str = "https://api.ooni.io/api/v1/aggregation";
 
-#[derive(Debug, Deserialize)]
-struct MeasurementsResponse {
+// Technologies to backfill a daily timeline (sparkline) for. Every tracked
+// circumvention tool plus the AI-access flagship. Each is fetched for ALL
+// countries in a single 2-D aggregation request (day x country), so — unlike
+// the old hardcoded (country, technology) TIMELINE_TARGETS table — this list is
+// technology-only and the country dimension comes from the response.
+const TIMELINE_TECHS: &[&str] = &["torproject", "signal", "i2p", "psiphon", "torsf", "openai.com"];
+
+// ── Aggregation response ───────────────────────────────────────────────────
+
+// One flat cell shape covers every sweep. Which of `probe_cc` /
+// `measurement_start_day` / `category_code` are populated depends on the
+// axis_x/axis_y requested; the rest come back absent and default to None.
+#[derive(Debug, Deserialize, Default)]
+struct AggResponse {
     #[serde(default)]
-    results: Vec<Measurement>,
+    result: Vec<AggCell>,
 }
 
-#[derive(Debug, Deserialize)]
-struct Measurement {
+#[derive(Debug, Deserialize, Default)]
+struct AggCell {
     #[serde(default)]
-    anomaly: Option<bool>,
+    probe_cc: Option<String>,
     #[serde(default)]
-    confirmed: Option<bool>,
+    measurement_start_day: Option<String>,
+    #[serde(default)]
+    category_code: Option<String>,
+    #[serde(default)]
+    anomaly_count: i64,
+    #[serde(default)]
+    confirmed_count: i64,
+    #[serde(default)]
+    failure_count: i64,
+    #[serde(default)]
+    ok_count: i64,
+    #[serde(default)]
+    measurement_count: i64,
+}
+
+impl AggCell {
+    // OONI usually sends `measurement_count`, but fall back to the component sum
+    // for the rare cell that omits it, so a rate is never divided by a zero that
+    // should have been a real total.
+    fn total(&self) -> i64 {
+        if self.measurement_count > 0 {
+            self.measurement_count
+        } else {
+            self.anomaly_count + self.confirmed_count + self.failure_count + self.ok_count
+        }
+    }
 }
 
 // ── Technology registry ───────────────────────────────────────────────────
@@ -71,8 +121,8 @@ impl TechCategory {
 struct Technology {
     key: &'static str,
     category: TechCategory,
-    // `None` for Tor, which is measured via the dedicated `tor` OONI test
-    // rather than a `web_connectivity` probe against a URL.
+    // `None` for tools measured via a dedicated OONI test (tor/psiphon/torsf and
+    // the messaging apps) rather than a `web_connectivity` probe against a URL.
     url: Option<&'static str>,
     test_name: &'static str,
 }
@@ -186,101 +236,49 @@ static REGISTRY: &[Technology] = &[
     },
 ];
 
-// Country/technology pairs to backfill a daily blocking timeline for. Covers
-// every tracked circumvention technology (torproject, signal, i2p, psiphon,
-// torsf) across all 5 countries, so historical charts aren't lopsided toward
-// Iran/Syria.
-const TIMELINE_TARGETS: &[(&str, &str)] = &[
-    ("IR", "torproject"),
-    ("IR", "signal"),
-    ("IR", "i2p"),
-    ("IR", "psiphon"),
-    ("IR", "torsf"),
-    ("IR", "openai.com"),
-    ("SY", "torproject"),
-    ("SY", "signal"),
-    ("SY", "i2p"),
-    ("SY", "psiphon"),
-    ("SY", "torsf"),
-    ("AE", "torproject"),
-    ("AE", "signal"),
-    ("AE", "i2p"),
-    ("AE", "psiphon"),
-    ("AE", "torsf"),
-    ("SA", "torproject"),
-    ("SA", "signal"),
-    ("SA", "i2p"),
-    ("SA", "psiphon"),
-    ("SA", "torsf"),
-    ("IQ", "torproject"),
-    ("IQ", "signal"),
-    ("IQ", "i2p"),
-    ("IQ", "psiphon"),
-    ("IQ", "torsf"),
-];
-
 /// Runs the adoption-signal reachability sweep, the per-technology block
 /// sweep, and the historical timeline backfill. Each phase is independent —
 /// a failure in one does not prevent the others from running.
 pub async fn fetch_and_store(state: &AppState) -> Result<()> {
-    // Read once and thread it through, so the two sweeps below can never
-    // disagree about which countries they cover.
-    let codes = super::fetch_codes(state)?;
-    if let Err(e) = fetch_and_store_signals(state, &codes).await {
+    // The set of ISO codes we recognise, read once. Every sweep groups by
+    // country server-side and filters its response against this, dropping the
+    // junk dimensions OONI emits (e.g. `ZZ`) rather than storing them as
+    // countries.
+    let known = known_codes(state)?;
+    if let Err(e) = fetch_and_store_signals(state, &known).await {
         eprintln!("ooni: adoption signal fetch failed: {e}");
     }
-    if let Err(e) = fetch_and_store_technology_blocks(state, &codes).await {
+    if let Err(e) = fetch_and_store_technology_blocks(state, &known).await {
         eprintln!("ooni: technology block fetch failed: {e}");
     }
-    if let Err(e) = fetch_and_store_timeline(state).await {
+    if let Err(e) = fetch_and_store_timeline(state, &known).await {
         eprintln!("ooni: timeline fetch failed: {e}");
     }
     Ok(())
 }
 
 /// The per-content-category sweep, run as its own fetcher (see run_fetchers)
-/// rather than as a phase of `fetch_and_store`. It is only one request per
-/// country, but chaining it behind the long technology-block + timeline
+/// rather than as a phase of `fetch_and_store`. It is a single request for the
+/// whole globe, but chaining it behind the long technology-block + timeline
 /// sweeps starved it of the shared OONI time budget — as its own concurrent
 /// task with its own timeout it always completes.
 pub async fn fetch_categories(state: &AppState) -> Result<()> {
-    let codes = super::fetch_codes(state)?;
-    fetch_and_store_categories(state, &codes).await
+    let known = known_codes(state)?;
+    fetch_and_store_categories(state, &known).await
 }
 
-// ── Adoption signal reachability sweep (existing behavior) ────────────────
-
-/// Queries the OONI Measurement Aggregation API for each (country, URL) pair
-/// and records a reachability signal per pair in `adoption_signals`.
-async fn fetch_and_store_signals(state: &AppState, codes: &[String]) -> Result<()> {
-    let client = reqwest::Client::builder()
-        .timeout(REQUEST_TIMEOUT)
-        .build()?;
-
-    for country in codes {
-        for url in TARGET_URLS {
-            match fetch_measurements(&client, country, url).await {
-                Ok(measurements) => {
-                    let (status, confidence) = classify(&measurements);
-                    if let Err(e) =
-                        insert_signal(state, country, url, status, confidence, measurements.len())
-                    {
-                        eprintln!("ooni: failed to store signal for {country} / {url}: {e}");
-                    }
-                }
-                Err(e) => {
-                    eprintln!("ooni: failed to fetch measurements for {country} / {url}: {e}");
-                }
-            }
-            tokio::time::sleep(REQUEST_PACING).await;
-        }
-    }
-    Ok(())
+/// Snapshot of the recognised ISO codes, taken without holding the DB lock
+/// across any `.await`.
+fn known_codes(state: &AppState) -> Result<HashSet<String>> {
+    let conn = state
+        .lock()
+        .map_err(|_| anyhow::anyhow!("db lock poisoned"))?;
+    crate::db::countries::known_codes(&conn)
 }
 
 /// Issues a GET, retrying on HTTP 429 with backoff (honoring `Retry-After`
 /// when the API sends one). The OONI API rate-limits hard enough that
-/// without this, most of a ~75-request sweep comes back empty.
+/// without this, a burst of sweep requests mostly comes back throttled.
 async fn get_with_retry(
     client: &reqwest::Client,
     url: &str,
@@ -308,44 +306,86 @@ async fn get_with_retry(
     }
 }
 
-async fn fetch_measurements(
-    client: &reqwest::Client,
-    country: &str,
-    url: &str,
-) -> Result<Vec<Measurement>> {
-    let resp = get_with_retry(
-        client,
-        MEASUREMENTS_ENDPOINT,
-        &[
-            ("probe_cc", country),
-            ("input", url),
-            ("test_name", "web_connectivity"),
-            ("limit", "100"),
-        ],
-    )
-    .await?;
-    Ok(resp.json::<MeasurementsResponse>().await?.results)
+/// One aggregation request → its flat list of cells.
+async fn fetch_aggregation(client: &reqwest::Client, query: &[(&str, &str)]) -> Result<Vec<AggCell>> {
+    let resp = get_with_retry(client, AGGREGATION_ENDPOINT, query).await?;
+    Ok(resp.json::<AggResponse>().await?.result)
 }
 
-/// Confirmed blocking on any measurement wins outright. Otherwise, any
-/// anomaly without confirmation is treated as inconclusive rather than
-/// accessible, since anomalies can stem from transient network issues.
-fn classify(measurements: &[Measurement]) -> (&'static str, &'static str) {
-    let total = measurements.len();
-    let confirmed_count = measurements
-        .iter()
-        .filter(|m| m.confirmed == Some(true))
-        .count();
-    let anomaly_count = measurements
-        .iter()
-        .filter(|m| m.anomaly == Some(true))
-        .count();
+/// Host as OONI records it in the `domain` dimension: scheme stripped, but the
+/// `www.` prefix KEPT. OONI stores `www.torproject.org`, and stripping the
+/// prefix collapses that domain's coverage from ~150 countries to 6.
+fn host_of(url: &str) -> String {
+    url.trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .to_string()
+}
 
-    let status = if confirmed_count > 0 {
+// ── Adoption signal reachability sweep ────────────────────────────────────
+
+struct SignalRow {
+    country: String,
+    status: &'static str,
+    confidence: &'static str,
+    count: i64,
+}
+
+/// One aggregation per AI-access URL, grouped by country, recording a
+/// reachability signal per country in `adoption_signals`.
+async fn fetch_and_store_signals(state: &AppState, known: &HashSet<String>) -> Result<()> {
+    let client = reqwest::Client::builder()
+        .timeout(REQUEST_TIMEOUT)
+        .build()?;
+    let since = days_ago_iso(POINT_IN_TIME_WINDOW_DAYS);
+
+    for url in TARGET_URLS {
+        let host = host_of(url);
+        let query = [
+            ("domain", host.as_str()),
+            ("test_name", "web_connectivity"),
+            ("axis_x", "probe_cc"),
+            ("since", since.as_str()),
+        ];
+        match fetch_aggregation(&client, &query).await {
+            Ok(cells) => {
+                let rows: Vec<SignalRow> = cells
+                    .iter()
+                    .filter_map(|c| {
+                        let cc = c.probe_cc.as_deref()?;
+                        if !known.contains(cc) {
+                            return None;
+                        }
+                        let total = c.total();
+                        let (status, confidence) =
+                            classify_signal(c.confirmed_count, c.anomaly_count, total);
+                        Some(SignalRow {
+                            country: cc.to_string(),
+                            status,
+                            confidence,
+                            count: total,
+                        })
+                    })
+                    .collect();
+                if let Err(e) = insert_signals(state, url, &rows) {
+                    eprintln!("ooni: failed to store signals for {url}: {e}");
+                }
+            }
+            Err(e) => eprintln!("ooni: failed to fetch signals for {url}: {e}"),
+        }
+        tokio::time::sleep(REQUEST_PACING).await;
+    }
+    Ok(())
+}
+
+/// Confirmed blocking on any measurement wins outright. Otherwise, any anomaly
+/// without confirmation is treated as inconclusive rather than accessible,
+/// since anomalies can stem from transient network issues.
+fn classify_signal(confirmed: i64, anomaly: i64, total: i64) -> (&'static str, &'static str) {
+    let status = if confirmed > 0 {
         "BLOCKED"
     } else if total == 0 {
         "INCONCLUSIVE"
-    } else if anomaly_count == 0 {
+    } else if anomaly == 0 {
         "ACCESSIBLE"
     } else {
         "INCONCLUSIVE"
@@ -371,39 +411,45 @@ fn provider_for(url: &str) -> &'static str {
     }
 }
 
-fn insert_signal(
-    state: &AppState,
-    country: &str,
-    url: &str,
-    status: &str,
-    confidence: &str,
-    measurement_count: usize,
-) -> Result<()> {
+fn insert_signals(state: &AppState, url: &str, rows: &[SignalRow]) -> Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
     let date = today_iso();
-    let signal_id = format!("ooni-{country}-{}-{date}", slug(url));
-    let value_text = format!(
-        "{status}: {measurement_count} OONI web_connectivity measurement{} for {url} from {country}",
-        if measurement_count == 1 { "" } else { "s" }
-    );
+    let provider = provider_for(url);
+    let source = "OONI Aggregation API v1 (api.ooni.io/api/v1/aggregation), grouped by probe_cc";
 
-    let conn = state
+    let mut conn = state
         .lock()
         .map_err(|_| anyhow::anyhow!("db lock poisoned"))?;
-    conn.execute(
-        "INSERT OR REPLACE INTO adoption_signals VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
-        rusqlite::params![
-            signal_id,
-            country,
-            provider_for(url),
-            url,
-            "NETWORK_MEASUREMENT",
-            "OONI_MEASUREMENT",
-            value_text,
-            date,
-            confidence,
-            "OONI Measurement Aggregation API v1 (api.ooni.io/api/v1/measurements)",
-        ],
-    )?;
+    let tx = conn.transaction()?;
+    {
+        let mut stmt =
+            tx.prepare("INSERT OR REPLACE INTO adoption_signals VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)")?;
+        for r in rows {
+            let signal_id = format!("ooni-{}-{}-{date}", r.country, slug(url));
+            let value_text = format!(
+                "{}: {} OONI web_connectivity measurement{} for {url} from {}",
+                r.status,
+                r.count,
+                if r.count == 1 { "" } else { "s" },
+                r.country,
+            );
+            stmt.execute(rusqlite::params![
+                signal_id,
+                r.country,
+                provider,
+                url,
+                "NETWORK_MEASUREMENT",
+                "OONI_MEASUREMENT",
+                value_text,
+                date,
+                r.confidence,
+                source,
+            ])?;
+        }
+    }
+    tx.commit()?;
     Ok(())
 }
 
@@ -413,79 +459,80 @@ fn slug(url: &str) -> String {
 
 // ── Per-technology block sweep ─────────────────────────────────────────────
 
-/// Sweeps every (country, technology) pair sequentially and paced (see
-/// REQUEST_PACING), inserting each result as soon as its fetch completes.
-/// Request count is `countries * REGISTRY.len()`.
-async fn fetch_and_store_technology_blocks(state: &AppState, codes: &[String]) -> Result<()> {
+struct TechRow {
+    country: String,
+    status: &'static str,
+    rate: f64,
+    count: i64,
+}
+
+/// One aggregation per technology, grouped by country over a trailing window,
+/// inserting a current point-in-time status per country into
+/// `technology_blocks`. Request count is `REGISTRY.len()`, independent of how
+/// many countries come back.
+async fn fetch_and_store_technology_blocks(state: &AppState, known: &HashSet<String>) -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
         .build()?;
+    let since = days_ago_iso(POINT_IN_TIME_WINDOW_DAYS);
 
-    for country in codes {
-        for tech in REGISTRY {
-            match fetch_tech_measurements(&client, country, tech.url, tech.test_name).await {
-                Ok(measurements) => {
-                    let (status, rate) = classify_technology(&measurements);
-                    if let Err(e) = insert_technology_block(
-                        state,
-                        country,
-                        tech,
-                        status,
-                        rate,
-                        measurements.len(),
-                    ) {
-                        eprintln!(
-                            "ooni: failed to store technology block for {country} / {}: {e}",
-                            tech.key
-                        );
-                    }
-                }
-                Err(e) => {
+    for tech in REGISTRY {
+        let host = tech.url.map(host_of);
+        let mut query: Vec<(&str, &str)> = vec![
+            ("test_name", tech.test_name),
+            ("axis_x", "probe_cc"),
+            ("since", since.as_str()),
+        ];
+        if let Some(h) = host.as_deref() {
+            query.push(("domain", h));
+        }
+
+        match fetch_aggregation(&client, &query).await {
+            Ok(cells) => {
+                let rows: Vec<TechRow> = cells
+                    .iter()
+                    .filter_map(|c| {
+                        let cc = c.probe_cc.as_deref()?;
+                        if !known.contains(cc) {
+                            return None;
+                        }
+                        let total = c.total();
+                        let (status, rate) = classify_technology(c.anomaly_count, total);
+                        Some(TechRow {
+                            country: cc.to_string(),
+                            status,
+                            rate,
+                            count: total,
+                        })
+                    })
+                    .collect();
+                if let Err(e) = insert_technology_blocks(state, tech, &rows) {
                     eprintln!(
-                        "ooni: failed to fetch measurements for {country} / {}: {e}",
+                        "ooni: failed to store technology blocks for {}: {e}",
                         tech.key
                     );
                 }
             }
-            tokio::time::sleep(REQUEST_PACING).await;
+            Err(e) => eprintln!(
+                "ooni: failed to fetch technology blocks for {}: {e}",
+                tech.key
+            ),
         }
+        tokio::time::sleep(REQUEST_PACING).await;
     }
     Ok(())
 }
 
-async fn fetch_tech_measurements(
-    client: &reqwest::Client,
-    country: &str,
-    url: Option<&str>,
-    test_name: &str,
-) -> Result<Vec<Measurement>> {
-    let mut query: Vec<(&str, &str)> = vec![
-        ("probe_cc", country),
-        ("test_name", test_name),
-        ("limit", "50"),
-    ];
-    if let Some(u) = url {
-        query.push(("input", u));
-    }
-
-    let resp = get_with_retry(client, MEASUREMENTS_ENDPOINT, &query).await?;
-    Ok(resp.json::<MeasurementsResponse>().await?.results)
-}
-
-/// Classifies by anomaly rate + sample size rather than the `confirmed`
-/// flag alone — OONI confirms blocking for very few test types, so relying
-/// on it exclusively would under-report circumvention-tool blocking.
-fn classify_technology(measurements: &[Measurement]) -> (&'static str, f64) {
-    let total = measurements.len();
+/// Classifies by anomaly rate + sample size rather than the `confirmed` flag
+/// alone — OONI confirms blocking for very few test types, so relying on it
+/// exclusively would under-report circumvention-tool blocking. Now fed the
+/// server-side aggregate counts for the whole window, which is both cheaper and
+/// more representative than the old ≤50-measurement sample.
+fn classify_technology(anomaly: i64, total: i64) -> (&'static str, f64) {
     if total == 0 {
         return ("INCONCLUSIVE", 0.0);
     }
-
-    let anomaly_count = measurements
-        .iter()
-        .filter(|m| m.anomaly == Some(true))
-        .count();
-    let rate = anomaly_count as f64 / total as f64;
+    let rate = anomaly as f64 / total as f64;
 
     let status = if rate > 0.7 && total > 10 {
         "CONFIRMED_BLOCKED"
@@ -500,103 +547,103 @@ fn classify_technology(measurements: &[Measurement]) -> (&'static str, f64) {
     (status, rate)
 }
 
-fn insert_technology_block(
-    state: &AppState,
-    country: &str,
-    tech: &Technology,
-    status: &str,
-    anomaly_rate: f64,
-    measurement_count: usize,
-) -> Result<()> {
-    let conn = state
+fn insert_technology_blocks(state: &AppState, tech: &Technology, rows: &[TechRow]) -> Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let date = today_iso();
+    let source = "OONI Aggregation API v1 (api.ooni.io/api/v1/aggregation), grouped by probe_cc";
+
+    let mut conn = state
         .lock()
         .map_err(|_| anyhow::anyhow!("db lock poisoned"))?;
-    conn.execute(
-        "INSERT OR REPLACE INTO technology_blocks
-         (country_code, category, technology, domain_or_url, test_name, status, anomaly_rate, measurement_count, checked_date, source_notes)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
-        rusqlite::params![
-            country,
-            tech.category.as_db_str(),
-            tech.key,
-            tech.url.unwrap_or(""),
-            tech.test_name,
-            status,
-            anomaly_rate,
-            measurement_count as i64,
-            today_iso(),
-            "OONI Measurement Aggregation API v1 (api.ooni.io/api/v1/measurements)",
-        ],
-    )?;
+    let tx = conn.transaction()?;
+    {
+        let mut stmt = tx.prepare(
+            "INSERT OR REPLACE INTO technology_blocks
+             (country_code, category, technology, domain_or_url, test_name, status, anomaly_rate, measurement_count, checked_date, source_notes)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+        )?;
+        for r in rows {
+            stmt.execute(rusqlite::params![
+                r.country,
+                tech.category.as_db_str(),
+                tech.key,
+                tech.url.unwrap_or(""),
+                tech.test_name,
+                r.status,
+                r.rate,
+                r.count,
+                date,
+                source,
+            ])?;
+        }
+    }
+    tx.commit()?;
     Ok(())
 }
 
 // ── Per-content-category censorship sweep ──────────────────────────────────
 
-#[derive(Debug, Deserialize, Default)]
-struct CategoryRow {
-    #[serde(default)]
-    category_code: Option<String>,
-    #[serde(default)]
-    anomaly_count: i64,
-    #[serde(default)]
-    confirmed_count: i64,
-    #[serde(default)]
-    measurement_count: i64,
+struct CatRow {
+    country: String,
+    category_code: String,
+    label: String,
+    status: &'static str,
+    rate: f64,
+    anomaly: i64,
+    confirmed: i64,
+    total: i64,
 }
 
-#[derive(Debug, Deserialize)]
-struct CategoryAggResponse {
-    #[serde(default)]
-    result: Vec<CategoryRow>,
-}
-
-/// One aggregation request per country, grouped by Citizen Lab category_code,
-/// records the anomaly rate per content category in `category_blocks`. This is
-/// the "what kinds of content are censored" view — NEWS, HUMR, LGBT, POLR, etc.
-async fn fetch_and_store_categories(state: &AppState, codes: &[String]) -> Result<()> {
+/// A single 2-D aggregation (category_code x probe_cc) records the anomaly rate
+/// per content category per country in `category_blocks` — the "what kinds of
+/// content are censored" view (NEWS, HUMR, LGBT, POLR, ...) for the whole globe
+/// in one request.
+async fn fetch_and_store_categories(state: &AppState, known: &HashSet<String>) -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
         .build()?;
 
-    for country in codes {
-        match fetch_category_aggregation(&client, country).await {
-            Ok(rows) => {
-                for row in &rows {
-                    let Some(code) = row.category_code.as_deref() else {
-                        continue;
-                    };
-                    if code.is_empty() {
-                        continue;
-                    }
-                    if let Err(e) = insert_category_block(state, country, code, row) {
-                        eprintln!("ooni: failed to store category {code} for {country}: {e}");
-                    }
-                }
-            }
-            Err(e) => eprintln!("ooni: failed to fetch categories for {country}: {e}"),
-        }
-        tokio::time::sleep(REQUEST_PACING).await;
-    }
-    Ok(())
-}
+    let query = [
+        ("test_name", "web_connectivity"),
+        ("axis_x", "category_code"),
+        ("axis_y", "probe_cc"),
+        ("since", TIMELINE_SINCE),
+    ];
 
-async fn fetch_category_aggregation(
-    client: &reqwest::Client,
-    country: &str,
-) -> Result<Vec<CategoryRow>> {
-    let resp = get_with_retry(
-        client,
-        AGGREGATION_ENDPOINT,
-        &[
-            ("probe_cc", country),
-            ("test_name", "web_connectivity"),
-            ("axis_x", "category_code"),
-            ("since", "2024-01-01"),
-        ],
-    )
-    .await?;
-    Ok(resp.json::<CategoryAggResponse>().await?.result)
+    let cells = fetch_aggregation(&client, &query).await?;
+    let rows: Vec<CatRow> = cells
+        .iter()
+        .filter_map(|c| {
+            let cc = c.probe_cc.as_deref()?;
+            if !known.contains(cc) {
+                return None;
+            }
+            let code = c.category_code.as_deref()?;
+            if code.is_empty() {
+                return None;
+            }
+            let total = c.total();
+            let rate = if total > 0 {
+                c.anomaly_count as f64 / total as f64
+            } else {
+                0.0
+            };
+            Some(CatRow {
+                country: cc.to_string(),
+                category_code: code.to_string(),
+                label: category_label(code),
+                status: classify_category(rate, total),
+                rate,
+                anomaly: c.anomaly_count,
+                confirmed: c.confirmed_count,
+                total,
+            })
+        })
+        .collect();
+
+    insert_category_blocks(state, &rows)
 }
 
 /// Categories aggregate hundreds of URLs, most of which stay reachable even
@@ -615,41 +662,39 @@ fn classify_category(anomaly_rate: f64, measurement_count: i64) -> &'static str 
     }
 }
 
-fn insert_category_block(
-    state: &AppState,
-    country: &str,
-    category_code: &str,
-    row: &CategoryRow,
-) -> Result<()> {
-    let total = row.measurement_count;
-    let rate = if total > 0 {
-        row.anomaly_count as f64 / total as f64
-    } else {
-        0.0
-    };
-    let status = classify_category(rate, total);
-    let label = category_label(category_code);
+fn insert_category_blocks(state: &AppState, rows: &[CatRow]) -> Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let date = today_iso();
+    let source = "OONI Aggregation API v1, grouped by Citizen Lab category_code x probe_cc";
 
-    let conn = state
+    let mut conn = state
         .lock()
         .map_err(|_| anyhow::anyhow!("db lock poisoned"))?;
-    conn.execute(
-        "INSERT OR REPLACE INTO category_blocks
-         (country_code, category_code, category_label, status, anomaly_rate, anomaly_count, confirmed_count, measurement_count, checked_date, source_notes)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
-        rusqlite::params![
-            country,
-            category_code,
-            label,
-            status,
-            rate,
-            row.anomaly_count,
-            row.confirmed_count,
-            total,
-            today_iso(),
-            "OONI Aggregation API v1, grouped by Citizen Lab category_code",
-        ],
-    )?;
+    let tx = conn.transaction()?;
+    {
+        let mut stmt = tx.prepare(
+            "INSERT OR REPLACE INTO category_blocks
+             (country_code, category_code, category_label, status, anomaly_rate, anomaly_count, confirmed_count, measurement_count, checked_date, source_notes)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+        )?;
+        for r in rows {
+            stmt.execute(rusqlite::params![
+                r.country,
+                r.category_code,
+                r.label,
+                r.status,
+                r.rate,
+                r.anomaly,
+                r.confirmed,
+                r.total,
+                date,
+                source,
+            ])?;
+        }
+    }
+    tx.commit()?;
     Ok(())
 }
 
@@ -696,119 +741,105 @@ fn category_label(code: &str) -> String {
 
 // ── Historical blocking timeline backfill ──────────────────────────────────
 
-#[derive(Debug, Deserialize, Default)]
-struct AggregationRow {
-    #[serde(default)]
-    measurement_start_day: String,
-    #[serde(default)]
-    anomaly_count: i64,
-    #[serde(default)]
-    confirmed_count: i64,
-    #[serde(default)]
-    failure_count: i64,
-    #[serde(default)]
-    ok_count: i64,
-    #[serde(default)]
-    measurement_count: i64,
+struct TimelineRow {
+    country: String,
+    day: String,
+    anomaly: i64,
+    confirmed: i64,
+    total: i64,
+    ok: i64,
 }
 
-#[derive(Debug, Deserialize)]
-struct AggregationResponse {
-    #[serde(default)]
-    result: Vec<AggregationRow>,
-}
-
-async fn fetch_and_store_timeline(state: &AppState) -> Result<()> {
+/// One 2-D aggregation per timeline technology (day x country) backfills the
+/// daily `blocking_timeline` for every country at once. Replaces the old
+/// hardcoded (country, technology) sweep, so a country gets a chart the moment
+/// it has measurements rather than only if it was on a hand-maintained list.
+async fn fetch_and_store_timeline(state: &AppState, known: &HashSet<String>) -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
         .build()?;
 
-    for (country, tech_key) in TIMELINE_TARGETS {
-        let Some(tech) = REGISTRY.iter().find(|t| t.key == *tech_key) else {
+    for &tech_key in TIMELINE_TECHS {
+        let Some(tech) = REGISTRY.iter().find(|t| t.key == tech_key) else {
             continue;
         };
-        // Tools tested via a dedicated OONI test (tor/psiphon/torsf) have no
-        // `url`, and the aggregation API aggregates those by test_name alone
-        // rather than by domain.
-        let domain = tech.url.map(bare_domain);
+        let host = tech.url.map(host_of);
+        let mut query: Vec<(&str, &str)> = vec![
+            ("test_name", tech.test_name),
+            ("axis_x", "measurement_start_day"),
+            ("axis_y", "probe_cc"),
+            ("since", TIMELINE_SINCE),
+        ];
+        if let Some(h) = host.as_deref() {
+            query.push(("domain", h));
+        }
 
-        match fetch_aggregation(&client, country, domain.as_deref(), tech.test_name).await {
-            Ok(rows) => {
-                for row in &rows {
-                    if row.measurement_start_day.is_empty() {
-                        continue;
-                    }
-                    if let Err(e) = insert_timeline_row(state, country, tech_key, row) {
-                        eprintln!(
-                            "ooni: failed to store timeline row for {country} / {tech_key}: {e}"
-                        );
-                    }
+        match fetch_aggregation(&client, &query).await {
+            Ok(cells) => {
+                let rows: Vec<TimelineRow> = cells
+                    .iter()
+                    .filter_map(|c| {
+                        let cc = c.probe_cc.as_deref()?;
+                        if !known.contains(cc) {
+                            return None;
+                        }
+                        let day = c.measurement_start_day.as_deref()?;
+                        // OONI silently switches to hourly granularity on short
+                        // windows (`2026-07-01T06:00:00Z`); that value is part of
+                        // the blocking_timeline primary key, so an unvalidated
+                        // hourly bucket multiplies rows instead of updating them.
+                        if !is_iso_date(day) {
+                            return None;
+                        }
+                        Some(TimelineRow {
+                            country: cc.to_string(),
+                            day: day.to_string(),
+                            anomaly: c.anomaly_count,
+                            confirmed: c.confirmed_count,
+                            total: c.total(),
+                            ok: c.ok_count,
+                        })
+                    })
+                    .collect();
+                if let Err(e) = insert_timeline_rows(state, tech_key, &rows) {
+                    eprintln!("ooni: failed to store timeline for {tech_key}: {e}");
                 }
             }
-            Err(e) => eprintln!("ooni: failed to fetch timeline for {country} / {tech_key}: {e}"),
+            Err(e) => eprintln!("ooni: failed to fetch timeline for {tech_key}: {e}"),
         }
         tokio::time::sleep(REQUEST_PACING).await;
     }
     Ok(())
 }
 
-async fn fetch_aggregation(
-    client: &reqwest::Client,
-    country: &str,
-    domain: Option<&str>,
-    test_name: &str,
-) -> Result<Vec<AggregationRow>> {
-    let mut query = vec![
-        ("probe_cc", country),
-        ("test_name", test_name),
-        ("axis_x", "measurement_start_day"),
-        ("since", "2024-01-01"),
-    ];
-    if let Some(d) = domain {
-        query.push(("domain", d));
+fn insert_timeline_rows(state: &AppState, technology: &str, rows: &[TimelineRow]) -> Result<()> {
+    if rows.is_empty() {
+        return Ok(());
     }
-
-    let resp = get_with_retry(client, AGGREGATION_ENDPOINT, &query).await?;
-    Ok(resp.json::<AggregationResponse>().await?.result)
-}
-
-fn insert_timeline_row(
-    state: &AppState,
-    country: &str,
-    technology: &str,
-    row: &AggregationRow,
-) -> Result<()> {
-    let total = if row.measurement_count > 0 {
-        row.measurement_count
-    } else {
-        row.anomaly_count + row.confirmed_count + row.failure_count + row.ok_count
-    };
-
-    let conn = state
+    let mut conn = state
         .lock()
         .map_err(|_| anyhow::anyhow!("db lock poisoned"))?;
-    conn.execute(
-        "INSERT OR REPLACE INTO blocking_timeline
-         (country_code, technology, measurement_date, anomaly_count, confirmed_count, measurement_count, ok_count)
-         VALUES (?1,?2,?3,?4,?5,?6,?7)",
-        rusqlite::params![
-            country,
-            technology,
-            row.measurement_start_day,
-            row.anomaly_count,
-            row.confirmed_count,
-            total,
-            row.ok_count,
-        ],
-    )?;
+    let tx = conn.transaction()?;
+    {
+        let mut stmt = tx.prepare(
+            "INSERT OR REPLACE INTO blocking_timeline
+             (country_code, technology, measurement_date, anomaly_count, confirmed_count, measurement_count, ok_count)
+             VALUES (?1,?2,?3,?4,?5,?6,?7)",
+        )?;
+        for r in rows {
+            stmt.execute(rusqlite::params![
+                r.country,
+                technology,
+                r.day,
+                r.anomaly,
+                r.confirmed,
+                r.total,
+                r.ok,
+            ])?;
+        }
+    }
+    tx.commit()?;
     Ok(())
-}
-
-fn bare_domain(url: &str) -> String {
-    url.trim_start_matches("https://")
-        .trim_start_matches("http://")
-        .trim_start_matches("www.")
-        .to_string()
 }
 
 // Date helpers live in crate::util::date — see the import at the top of this
