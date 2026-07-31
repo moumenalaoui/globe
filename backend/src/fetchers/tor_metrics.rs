@@ -1,4 +1,5 @@
 use crate::AppState;
+use crate::util::date::today_iso;
 use anyhow::{Result, bail};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -11,13 +12,26 @@ const COUNTRY_CODES: [&str; 5] = ["IR", "SY", "AE", "SA", "IQ"];
 const RELAY_ENDPOINT: &str = "https://metrics.torproject.org/userstats-relay-country.csv";
 const BRIDGE_ENDPOINT: &str = "https://metrics.torproject.org/userstats-bridge-country.csv";
 const START_DATE: &str = "2024-01-01";
-const END_DATE: &str = "2026-07-05";
+
+// Tor's `end` parameter is INCLUSIVE (unlike OONI's exclusive `until`), so
+// today's date is the correct upper bound. This was previously a hardcoded
+// literal, which silently truncated the series at that date and dropped every
+// day that passed afterwards — the window has to move with the clock.
+fn end_date() -> String {
+    today_iso()
+}
 
 const USER_AGENT: &str = "Censorship Tracker";
 
 // A small, polite gap between the 10 requests (5 countries x relay+bridge)
 // so we don't fire a burst at an API we have no rate-limit data on.
 const REQUEST_PACING: Duration = Duration::from_millis(300);
+
+// Tor Metrics renders these CSVs on demand over a multi-year window, which
+// routinely takes several seconds and has no retry path here — so a timeout is
+// a total loss for that country, not a retryable blip. Sized to tolerate a
+// slow render rather than to fail fast.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
 struct RelayRow {
     date: String,
@@ -44,7 +58,7 @@ pub async fn fetch_and_store(state: &AppState) -> Result<()> {
     );
 
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
+        .timeout(REQUEST_TIMEOUT)
         .default_headers(default_headers)
         .build()?;
 
@@ -99,7 +113,10 @@ pub async fn fetch_and_store(state: &AppState) -> Result<()> {
 
 async fn fetch_relay_csv(client: &reqwest::Client, country: &str) -> Result<Vec<RelayRow>> {
     let cc = country.to_lowercase();
-    let url = format!("{RELAY_ENDPOINT}?start={START_DATE}&end={END_DATE}&country={cc}&events=off");
+    let url = format!(
+        "{RELAY_ENDPOINT}?start={START_DATE}&end={}&country={cc}&events=off",
+        end_date()
+    );
     let body = client
         .get(&url)
         .send()
@@ -152,7 +169,10 @@ async fn fetch_relay_csv(client: &reqwest::Client, country: &str) -> Result<Vec<
 
 async fn fetch_bridge_csv(client: &reqwest::Client, country: &str) -> Result<Vec<BridgeRow>> {
     let cc = country.to_lowercase();
-    let url = format!("{BRIDGE_ENDPOINT}?start={START_DATE}&end={END_DATE}&country={cc}");
+    let url = format!(
+        "{BRIDGE_ENDPOINT}?start={START_DATE}&end={}&country={cc}",
+        end_date()
+    );
     let body = client
         .get(&url)
         .send()

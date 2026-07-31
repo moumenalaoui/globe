@@ -6,6 +6,14 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
         "
         PRAGMA journal_mode=WAL;
 
+        -- journal_mode is persistent per-database, but these two are
+        -- per-connection and must be set on every connection that is opened.
+        -- busy_timeout is not optional: /api/evaluate writes evidence rows, so
+        -- there is more than one writer, and without it a concurrent write
+        -- surfaces as SQLITE_BUSY -> HTTP 500 rather than a short wait.
+        PRAGMA busy_timeout=5000;
+        PRAGMA synchronous=NORMAL;
+
         CREATE TABLE IF NOT EXISTS countries (
             country_code             TEXT PRIMARY KEY,
             country_name             TEXT NOT NULL,
@@ -187,6 +195,33 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
             evidence_id TEXT NOT NULL,
             PRIMARY KEY (path_id, evidence_id)
         );
+
+        -- ── Indexes ──────────────────────────────────────────────────────
+        --
+        -- tor_metrics is keyed on a synthetic `id` ('{country}-{date}'), so
+        -- the only query that matters ('WHERE country_code = ? ORDER BY date')
+        -- had no usable index and planned as a full SCAN plus a temp B-tree
+        -- sort. Invisible at a few thousand rows; a full scan and sort of the
+        -- whole table on every sidebar open once this covers every country.
+        CREATE INDEX IF NOT EXISTS idx_tor_metrics_country_date
+            ON tor_metrics(country_code, date);
+
+        -- technology_blocks' PRIMARY KEY (country_code, technology) already
+        -- serves lookups by country via prefix, but /api/blocking also filters
+        -- on category alone.
+        CREATE INDEX IF NOT EXISTS idx_tech_blocks_category
+            ON technology_blocks(category);
+
+        CREATE INDEX IF NOT EXISTS idx_adoption_signals_country
+            ON adoption_signals(country_code);
+
+        CREATE INDEX IF NOT EXISTS idx_country_scores_country_year
+            ON country_scores(country_code, year DESC);
+
+        -- blocking_timeline deliberately gets nothing: its PRIMARY KEY
+        -- (country_code, technology, measurement_date) autoindex already
+        -- serves every current query and supplies their ORDER BY for free.
+        -- Any index added here is paid on every row of a ~600k-row sweep.
     ",
     )?;
     Ok(())

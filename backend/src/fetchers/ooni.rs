@@ -1,4 +1,5 @@
 use crate::AppState;
+use crate::util::date::today_iso;
 use anyhow::Result;
 use serde::Deserialize;
 use std::time::Duration;
@@ -14,6 +15,12 @@ const MAX_RATE_LIMIT_RETRIES: u32 = 2;
 // then insert-all) so a startup timeout only loses whatever hadn't been
 // reached yet, not everything fetched so far.
 const REQUEST_PACING: Duration = Duration::from_millis(2000);
+
+// Generous on purpose. OONI generates aggregations server-side and a wide
+// window over many days legitimately takes over ten seconds to come back — the
+// previous 10s ceiling was close enough to typical response time to fail
+// intermittently on exactly the largest, most valuable responses.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
 const COUNTRY_CODES: [&str; 5] = ["IR", "SY", "AE", "SA", "IQ"];
 
@@ -205,7 +212,7 @@ pub async fn fetch_and_store(state: &AppState) -> Result<()> {
 /// and records a reachability signal per pair in `adoption_signals`.
 async fn fetch_and_store_signals(state: &AppState) -> Result<()> {
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
+        .timeout(REQUEST_TIMEOUT)
         .build()?;
 
     for country in COUNTRY_CODES {
@@ -369,7 +376,7 @@ fn slug(url: &str) -> String {
 /// each result as soon as its fetch completes.
 async fn fetch_and_store_technology_blocks(state: &AppState) -> Result<()> {
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
+        .timeout(REQUEST_TIMEOUT)
         .build()?;
 
     for country in COUNTRY_CODES {
@@ -508,7 +515,7 @@ struct AggregationResponse {
 
 async fn fetch_and_store_timeline(state: &AppState) -> Result<()> {
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
+        .timeout(REQUEST_TIMEOUT)
         .build()?;
 
     for (country, tech_key) in TIMELINE_TARGETS {
@@ -599,30 +606,5 @@ fn bare_domain(url: &str) -> String {
         .to_string()
 }
 
-// ── Date helpers ────────────────────────────────────────────────────────────
-
-fn today_iso() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
-    let (y, m, d) = civil_from_days(secs.div_euclid(86_400));
-    format!("{y:04}-{m:02}-{d:02}")
-}
-
-/// Howard Hinnant's days-since-epoch to civil-date algorithm
-/// (http://howardhinnant.github.io/date_algorithms.html), used here to avoid
-/// pulling in a date/time crate for a single "what's today's date" call.
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    let y = if m <= 2 { y + 1 } else { y };
-    (y, m, d)
-}
+// Date helpers live in crate::util::date — see the import at the top of this
+// file. They were duplicated here and in freedom_house.rs.

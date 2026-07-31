@@ -11,6 +11,7 @@ mod db;
 mod engine;
 mod fetchers;
 mod models;
+mod util;
 
 pub type AppState = Arc<Mutex<Connection>>;
 
