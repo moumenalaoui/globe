@@ -3,7 +3,6 @@ use anyhow::Result;
 use serde::Deserialize;
 use std::time::Duration;
 
-const COUNTRY_CODES: [&str; 5] = ["IR", "SY", "AE", "SA", "IQ"];
 const ANNOTATIONS_ENDPOINT: &str = "https://api.cloudflare.com/client/v4/radar/annotations";
 
 #[derive(Debug, Deserialize, Default)]
@@ -46,7 +45,7 @@ pub async fn fetch_and_store(state: &AppState) -> Result<()> {
         .timeout(Duration::from_secs(10))
         .build()?;
 
-    for country in COUNTRY_CODES {
+    for country in &super::fetch_codes(state)? {
         match fetch_annotations(&client, &token, country).await {
             Ok(events) => {
                 for event in events {

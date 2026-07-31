@@ -1,37 +1,16 @@
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useState } from 'react'
 import { BORDER, MONO, MUTED, SIDEBAR, WHITE } from '../theme'
 import { BLOCKING_REGISTRY, BLOCKING_STATUS_COLOR } from '../lib/blockingRegistry'
 
 const ALL_TECHNOLOGIES = Object.values(BLOCKING_REGISTRY).flat()
 
-export default function BlockingHeatmap() {
-  const [countries, setCountries] = useState(null)
-  const [rows, setRows] = useState(null)
-  const [error, setError] = useState(false)
+// `countries` and `rows` come from App, which owns both responses — this used
+// to fetch /api/countries and /api/blocking itself, duplicating what its parent
+// and the globe had already requested.
+export default function BlockingHeatmap({ countries, rows }) {
   const [collapsed, setCollapsed] = useState(false)
 
-  useEffect(() => {
-    let cancelled = false
-
-    Promise.all([
-      fetch('/api/countries').then((r) => (r.ok ? r.json() : [])),
-      fetch('/api/blocking').then((r) => (r.ok ? r.json() : [])),
-    ])
-      .then(([countryRows, blockingRows]) => {
-        if (cancelled) return
-        setCountries(countryRows)
-        setRows(blockingRows)
-      })
-      .catch(() => {
-        if (!cancelled) setError(true)
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  if (error || !countries || !rows) return null
+  if (!countries?.length || !rows) return null
 
   const byKey = Object.fromEntries(rows.map((r) => [`${r.country_code}:${r.technology}`, r]))
 

@@ -41,6 +41,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(|| async { "ok" }))
         .route("/api/countries", get(api::countries::list_countries))
         .route("/api/countries/:code", get(api::countries::get_country))
+        .route("/api/geo", get(api::geo::list_geo))
         .route("/api/models", get(api::models::list_models))
         .route("/api/deals", get(api::deals::list_deals))
         .route("/api/evaluate", post(api::evaluate::evaluate))
@@ -48,6 +49,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/blocking", get(api::blocking::list_blocking))
         .route("/api/timeline", get(api::timeline::list_timeline))
         .route("/api/tor-metrics", get(api::tor_metrics::list_tor_metrics))
+        .route("/api/outages", get(api::outages::list_outages))
         .route(
             "/api/country-scores",
             get(api::country_scores::list_country_scores),
@@ -55,8 +57,15 @@ async fn main() -> anyhow::Result<()> {
         .layer(cors)
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3001").await?;
-    println!("Backend on http://localhost:3001");
+    // Defaults to 3001 (what the Vite dev proxy targets). Overridable so a
+    // second instance can be run alongside a dev server for verification.
+    let port: u16 = std::env::var("PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(3001);
+
+    let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
+    println!("Backend on http://localhost:{port}");
     axum::serve(listener, app).await?;
     Ok(())
 }

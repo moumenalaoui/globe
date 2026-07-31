@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState } from 'react'
 import DealsChart from './DealsChart'
 import FreedomHouseChart from './FreedomHouseChart'
 import ModelLandscapeChart from './ModelLandscapeChart'
+import OutageTimeline from './OutageTimeline'
 import TimelineChart from './TimelineChart'
 import TorChart from './TorChart'
 import {
@@ -79,7 +80,7 @@ function BlockingTechRow({ tech, row, countryCode, timelineRows }) {
       </div>
       {showTimeline && (
         <div style={{ padding: '6px 0 6px 0' }}>
-          <TimelineChart countryCode={countryCode} technology={tech} />
+          <TimelineChart rows={timelineRows} />
         </div>
       )}
     </div>
@@ -216,6 +217,8 @@ export default function CountrySidebar({ country, layer, onClose }) {
             ))}
           </section>
         )}
+
+        <OutageTimeline countryCode={country.country_code} />
 
         <FreedomHouseChart countryCode={country.country_code} countryName={country.country_name} />
 

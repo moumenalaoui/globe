@@ -1,6 +1,6 @@
 use crate::models::{
-    country::Country, deal::Deal, deployment::Status, model_release::ModelRelease,
-    signal::AdoptionSignal,
+    country::Country, country_reference::CountryReference, deal::Deal, deployment::Status,
+    model_release::ModelRelease, signal::AdoptionSignal,
 };
 use anyhow::{Context, Result};
 use rusqlite::Connection;
@@ -20,6 +20,7 @@ fn read_seed<T: serde::de::DeserializeOwned>(name: &str) -> Result<Vec<T>> {
 pub fn load_all(conn: &Connection) -> Result<()> {
     conn.execute_batch("BEGIN;")?;
     let result = (|| {
+        load_country_reference(conn)?;
         load_countries(conn)?;
         load_models(conn)?;
         load_deals(conn)?;
@@ -44,6 +45,36 @@ pub fn load_all(conn: &Connection) -> Result<()> {
             Err(e)
         }
     }
+}
+
+/// Loads the world country list. `INSERT OR REPLACE` rather than
+/// `OR IGNORE` (used everywhere else here): this is generated reference data
+/// with no hand edits to preserve, so a regenerated file should actually take
+/// effect instead of being silently ignored on an existing database.
+fn load_country_reference(conn: &Connection) -> Result<()> {
+    let rows: Vec<CountryReference> = read_seed("country_reference.json")?;
+    for r in rows {
+        conn.execute(
+            "INSERT OR REPLACE INTO country_reference VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+            rusqlite::params![
+                r.country_code,
+                r.country_name,
+                r.alpha3,
+                r.iso_numeric,
+                r.region,
+                r.subregion,
+                r.centroid_lat,
+                r.centroid_lon,
+                r.bbox_min_lon,
+                r.bbox_min_lat,
+                r.bbox_max_lon,
+                r.bbox_max_lat,
+                r.include_on_globe as i64,
+                r.priority_tier,
+            ],
+        )?;
+    }
+    Ok(())
 }
 
 fn load_countries(conn: &Connection) -> Result<()> {

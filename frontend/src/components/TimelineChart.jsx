@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react'
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { BORDER, CRIMSON, MONO, MUTED, SIDEBAR, WHITE } from '../theme'
 
@@ -17,33 +16,14 @@ function anomalyRate(row) {
   return row.anomaly_count / row.measurement_count
 }
 
-export default function TimelineChart({ countryCode, technology }) {
-  const [rows, setRows] = useState(null)
-  const [error, setError] = useState(false)
-
-  useEffect(() => {
-    let cancelled = false
-    setRows(null)
-    setError(false)
-
-    fetch(`/api/timeline?country=${countryCode}&technology=${technology}`)
-      .then((r) => {
-        if (!r.ok) throw new Error('Failed to fetch timeline')
-        return r.json()
-      })
-      .then((data) => {
-        if (!cancelled) setRows(data)
-      })
-      .catch(() => {
-        if (!cancelled) setError(true)
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [countryCode, technology])
-
-  if (error || !rows || rows.length === 0) return null
+// Purely presentational: `rows` come from CountrySidebar, which already
+// fetches every promoted (country, technology) timeline to decide which rows
+// are worth showing at all. Fetching here as well re-requested a URL the parent
+// already had — and because the visible technology list changes as that data
+// lands, each re-render churned this component through several mounts, firing
+// the same request again each time.
+export default function TimelineChart({ rows }) {
+  if (!rows || rows.length === 0) return null
 
   const chartData = rows.map((row) => ({
     date: row.measurement_date,

@@ -22,8 +22,6 @@ const REQUEST_PACING: Duration = Duration::from_millis(2000);
 // intermittently on exactly the largest, most valuable responses.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
-const COUNTRY_CODES: [&str; 5] = ["IR", "SY", "AE", "SA", "IQ"];
-
 const TARGET_URLS: [&str; 4] = [
     "https://api.openai.com",
     "https://openai.com",
@@ -194,10 +192,13 @@ const TIMELINE_TARGETS: &[(&str, &str)] = &[
 /// sweep, and the historical timeline backfill. Each phase is independent —
 /// a failure in one does not prevent the others from running.
 pub async fn fetch_and_store(state: &AppState) -> Result<()> {
-    if let Err(e) = fetch_and_store_signals(state).await {
+    // Read once and thread it through, so the two sweeps below can never
+    // disagree about which countries they cover.
+    let codes = super::fetch_codes(state)?;
+    if let Err(e) = fetch_and_store_signals(state, &codes).await {
         eprintln!("ooni: adoption signal fetch failed: {e}");
     }
-    if let Err(e) = fetch_and_store_technology_blocks(state).await {
+    if let Err(e) = fetch_and_store_technology_blocks(state, &codes).await {
         eprintln!("ooni: technology block fetch failed: {e}");
     }
     if let Err(e) = fetch_and_store_timeline(state).await {
@@ -210,12 +211,12 @@ pub async fn fetch_and_store(state: &AppState) -> Result<()> {
 
 /// Queries the OONI Measurement Aggregation API for each (country, URL) pair
 /// and records a reachability signal per pair in `adoption_signals`.
-async fn fetch_and_store_signals(state: &AppState) -> Result<()> {
+async fn fetch_and_store_signals(state: &AppState, codes: &[String]) -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
         .build()?;
 
-    for country in COUNTRY_CODES {
+    for country in codes {
         for url in TARGET_URLS {
             match fetch_measurements(&client, country, url).await {
                 Ok(measurements) => {
@@ -371,15 +372,15 @@ fn slug(url: &str) -> String {
 
 // ── Per-technology block sweep ─────────────────────────────────────────────
 
-/// Sweeps every (country, technology) pair — 5 countries x 10 technologies,
-/// 50 requests — sequentially and paced (see REQUEST_PACING), inserting
-/// each result as soon as its fetch completes.
-async fn fetch_and_store_technology_blocks(state: &AppState) -> Result<()> {
+/// Sweeps every (country, technology) pair sequentially and paced (see
+/// REQUEST_PACING), inserting each result as soon as its fetch completes.
+/// Request count is `countries * REGISTRY.len()`.
+async fn fetch_and_store_technology_blocks(state: &AppState, codes: &[String]) -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
         .build()?;
 
-    for country in COUNTRY_CODES {
+    for country in codes {
         for tech in REGISTRY {
             match fetch_tech_measurements(&client, country, tech.url, tech.test_name).await {
                 Ok(measurements) => {

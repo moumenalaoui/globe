@@ -6,6 +6,12 @@ export async function getCountries() {
   return r.json()
 }
 
+export async function getBlocking() {
+  const r = await fetch(`${BASE}/blocking`)
+  if (!r.ok) throw new Error('Failed to fetch blocking status')
+  return r.json()
+}
+
 export async function getCountry(code) {
   const r = await fetch(`${BASE}/countries/${code}`)
   if (!r.ok) throw new Error(`Failed to fetch country ${code}`)
@@ -29,5 +35,27 @@ export async function evaluate(countryCode, sensitivity, orgType) {
 export async function getSignals(countryCode) {
   const r = await fetch(`${BASE}/signals?country=${countryCode}`)
   if (!r.ok) throw new Error('Failed to fetch signals')
+  return r.json()
+}
+
+// Country identity + map geometry (centroids) for every drawable country.
+// Used to place the global internet-outage overlay, which can light up any
+// country, not just the researched five.
+export async function getGeo() {
+  const r = await fetch(`${BASE}/geo`)
+  if (!r.ok) throw new Error('Failed to fetch geo')
+  return r.json()
+}
+
+// IODA internet-outage events. `active` restricts to outages that ended
+// within the backend's recent-activity grace window (the "live" set);
+// `country` restricts to one country's history.
+export async function getOutages({ country, active } = {}) {
+  const params = new URLSearchParams()
+  if (country) params.set('country', country)
+  if (active) params.set('active', 'true')
+  const qs = params.toString()
+  const r = await fetch(`${BASE}/outages${qs ? `?${qs}` : ''}`)
+  if (!r.ok) throw new Error('Failed to fetch outages')
   return r.json()
 }

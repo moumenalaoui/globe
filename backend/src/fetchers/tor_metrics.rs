@@ -4,8 +4,6 @@ use anyhow::{Result, bail};
 use std::collections::HashMap;
 use std::time::Duration;
 
-const COUNTRY_CODES: [&str; 5] = ["IR", "SY", "AE", "SA", "IQ"];
-
 // Tor Metrics exposes CSV downloads, not a REST/JSON API — there is no
 // /api/1.0/ path. `events=off` on the relay endpoint matches the confirmed
 // live URL format.
@@ -23,8 +21,8 @@ fn end_date() -> String {
 
 const USER_AGENT: &str = "Censorship Tracker";
 
-// A small, polite gap between the 10 requests (5 countries x relay+bridge)
-// so we don't fire a burst at an API we have no rate-limit data on.
+// A small, polite gap between requests (2 per country: relay + bridge) so we
+// don't fire a burst at an API we have no rate-limit data on.
 const REQUEST_PACING: Duration = Duration::from_millis(300);
 
 // Tor Metrics renders these CSVs on demand over a multi-year window, which
@@ -62,7 +60,7 @@ pub async fn fetch_and_store(state: &AppState) -> Result<()> {
         .default_headers(default_headers)
         .build()?;
 
-    for country in COUNTRY_CODES {
+    for country in &super::fetch_codes(state)? {
         let relay_rows = match fetch_relay_csv(&client, country).await {
             Ok(rows) => rows,
             Err(e) => {

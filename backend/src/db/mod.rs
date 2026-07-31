@@ -1,8 +1,9 @@
+pub mod countries;
 pub mod schema;
 pub mod seed;
 
 use crate::AppState;
-use anyhow::Result;
+use anyhow::{Result, bail};
 use rusqlite::Connection;
 use std::time::Duration;
 
@@ -12,6 +13,33 @@ use std::time::Duration;
 pub fn init_schema(conn: &Connection) -> Result<()> {
     schema::create_tables(conn)?;
     seed::load_all(conn)?;
+    assert_reference_covers_researched(conn)?;
+    Ok(())
+}
+
+/// Two country lists exist on purpose — `country_reference` (every country) and
+/// `countries` (the researched dossiers) — and two lists can drift. Fail at
+/// boot, before the listener binds, rather than letting a researched country
+/// silently lack a centroid and vanish from the globe.
+fn assert_reference_covers_researched(conn: &Connection) -> Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT c.country_code FROM countries c
+         LEFT JOIN country_reference r USING (country_code)
+         WHERE r.country_code IS NULL
+         ORDER BY c.country_code",
+    )?;
+    let missing = stmt
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    if !missing.is_empty() {
+        bail!(
+            "countries present in `countries` but absent from `country_reference`: {}. \
+             Add them to data/seed/country_reference.json (regenerate with \
+             scripts/gen_country_reference.mjs).",
+            missing.join(", ")
+        );
+    }
     Ok(())
 }
 
@@ -50,6 +78,7 @@ pub async fn run_fetchers(state: &AppState) {
             30,
             crate::fetchers::freedom_house::fetch_and_store(state)
         ),
+        run_with_timeout("ioda", 180, crate::fetchers::ioda::fetch_and_store(state)),
     );
     println!("Background data fetchers finished.");
 }

@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import * as Cesium from 'cesium'
 import * as topojson from 'topojson-client'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
-import { AMBER, BLACK, CRIMSON, TIER_COLORS } from '../theme'
+import { BLACK, CRIMSON, DIM } from '../theme'
+import { BLOCKING_STATUS_COLOR } from '../lib/blockingRegistry'
 
 // Read from the environment rather than inlined here: anything in this file
 // ships to the browser *and* to git. The Viewer below runs with
@@ -14,94 +15,112 @@ if (ION_TOKEN) {
   Cesium.Ion.defaultAccessToken = ION_TOKEN
 }
 
-// ISO numeric codes (world-atlas) -> ISO alpha-2
-const COUNTRY_CODES = {
-  '364': 'IR',  // Iran
-  '760': 'SY',  // Syria
-  '784': 'AE',  // UAE
-  '682': 'SA',  // Saudi Arabia
-  '368': 'IQ',  // Iraq
-}
-
-// Supported country centroids — marker + arc-origin positions
-const COUNTRY_CENTROIDS = {
-  IR: [53.7, 32.4],
-  SY: [38.5, 35.0],
-  AE: [53.8, 23.4],
-  SA: [45.0, 23.9],
-  IQ: [43.7, 33.2],
-}
-
-// Fly-to altitudes per country on click
-const FLY_ALTITUDE = {
-  IR: 2200000,
-  SY: 1200000,
-  AE: 900000,
-  SA: 2500000,
-  IQ: 1500000,
-}
-
 const PULSE_PERIOD_MS = 2500
 const FLARE_DURATION_MS = 500
 
-// Ranks blocking status severity so a country/layer with mixed technology
-// statuses is represented by its single worst one.
-const BLOCKING_SEVERITY = { CONFIRMED_BLOCKED: 3, LIKELY_BLOCKED: 2, ACCESSIBLE: 1, INCONCLUSIVE: 0 }
+// Outage markers pulse faster than the tier markers so a "live disruption"
+// reads as more urgent than the steady baseline presence markers.
+const OUTAGE_PULSE_PERIOD_MS = 1400
 
-function worstStatus(rows) {
-  if (rows.length === 0) return 'NO_DATA'
-  return rows.reduce((worst, row) => {
-    const rank = BLOCKING_SEVERITY[row.status] ?? -1
-    const worstRank = BLOCKING_SEVERITY[worst] ?? -1
-    return rank > worstRank ? row.status : worst
-  }, rows[0].status)
+// Whole-globe framing, centred on ~20°E/15°N rather than 0/0 so the front
+// hemisphere on load holds Europe, Africa, the Middle East and South Asia — the
+// densest censorship geography — instead of the mid-Atlantic.
+const HOME_VIEW = { lon: 20.0, lat: 15.0, height: 20_000_000 }
+
+// Marker colour is blocking status, full stop. This used to be the country's
+// sanctions tier, which coupled the globe to researched policy data it does not
+// otherwise need, and had two failure modes at scale: an unrecognised tier
+// produced `undefined`, and `Cesium.Color.fromCssColorString(undefined)` throws
+// out of the init path and takes down the *entire* globe render; and a country
+// with no tier at all was silently skipped. Reusing BLOCKING_STATUS_COLOR also
+// means a colour on the globe and the same colour in the sidebar status row are
+// guaranteed to mean the same thing.
+const CESIUM_STATUS_COLOR = Object.fromEntries(
+  Object.entries(BLOCKING_STATUS_COLOR).map(([status, hex]) => [
+    status,
+    Cesium.Color.fromCssColorString(hex),
+  ]),
+)
+const CESIUM_DIM = Cesium.Color.fromCssColorString(DIM)
+const CESIUM_CRIMSON = Cesium.Color.fromCssColorString(CRIMSON)
+
+function cesiumColorFor(status) {
+  return CESIUM_STATUS_COLOR[status] ?? CESIUM_DIM
 }
 
-function buildBlockingMap(rows, countryCodes) {
-  const map = {}
-  countryCodes.forEach((code) => {
-    const forCountry = rows.filter((r) => r.country_code === code)
-    map[code] = {
-      ALL: worstStatus(forCountry),
-      AI_ACCESS: worstStatus(forCountry.filter((r) => r.category === 'AI_ACCESS')),
-      CIRCUMVENTION: worstStatus(forCountry.filter((r) => r.category === 'CIRCUMVENTION')),
-    }
-  })
-  return map
+// "Measured, but unresolved" is a real and different state from "blocked" — it
+// gets a small dim point rather than a full pulsing marker, so it reads as
+// present-but-inconclusive instead of competing for attention.
+function isInconclusive(status) {
+  return status === 'INCONCLUSIVE'
 }
 
-function drawRingCanvas(hex) {
-  const size = 64
-  const canvas = document.createElement('canvas')
-  canvas.width = size
-  canvas.height = size
-  const ctx = canvas.getContext('2d')
-  ctx.strokeStyle = hex
-  ctx.lineWidth = 4
-  ctx.beginPath()
-  ctx.arc(size / 2, size / 2, size / 2 - 4, 0, Math.PI * 2)
-  ctx.stroke()
-  return canvas
+// Canvases are cached per (kind, hex) instead of created per country. There are
+// only a handful of distinct statuses, so this is a bounded set no matter how
+// many countries are drawn.
+const canvasCache = new Map()
+
+function ringCanvas(hex) {
+  const key = `ring:${hex}`
+  if (!canvasCache.has(key)) {
+    const size = 64
+    const canvas = document.createElement('canvas')
+    canvas.width = size
+    canvas.height = size
+    const ctx = canvas.getContext('2d')
+    ctx.strokeStyle = hex
+    ctx.lineWidth = 4
+    ctx.beginPath()
+    ctx.arc(size / 2, size / 2, size / 2 - 4, 0, Math.PI * 2)
+    ctx.stroke()
+    canvasCache.set(key, canvas)
+  }
+  return canvasCache.get(key)
 }
 
-function drawDotCanvas(hex) {
-  const size = 32
-  const canvas = document.createElement('canvas')
-  canvas.width = size
-  canvas.height = size
-  const ctx = canvas.getContext('2d')
-  ctx.fillStyle = hex
-  ctx.beginPath()
-  ctx.arc(size / 2, size / 2, size / 2 - 2, 0, Math.PI * 2)
-  ctx.fill()
-  return canvas
+function dotCanvas(hex) {
+  const key = `dot:${hex}`
+  if (!canvasCache.has(key)) {
+    const size = 32
+    const canvas = document.createElement('canvas')
+    canvas.width = size
+    canvas.height = size
+    const ctx = canvas.getContext('2d')
+    ctx.fillStyle = hex
+    ctx.beginPath()
+    ctx.arc(size / 2, size / 2, size / 2 - 2, 0, Math.PI * 2)
+    ctx.fill()
+    canvasCache.set(key, canvas)
+  }
+  return canvasCache.get(key)
 }
 
-export default function Globe({ onCountrySelect, onLoadError, layer = 'ALL' }) {
+// Fly-to altitude derived from the country's bounding box rather than a
+// hand-authored per-country table, so it frames Vatican City and Russia
+// sensibly without anyone maintaining a list. Clamped because a bbox that spans
+// the antimeridian or a whole hemisphere would otherwise zoom to orbit.
+function altitudeFor(geo) {
+  if (!geo || geo.bbox_min_lon == null || geo.bbox_max_lon == null) return 4_000_000
+  const span = Math.max(geo.bbox_max_lon - geo.bbox_min_lon, geo.bbox_max_lat - geo.bbox_min_lat)
+  return Math.min(Math.max(span * 180_000, 700_000), 8_000_000)
+}
+
+// `geoByCode` supplies centroids and bounding boxes for every country the
+// basemap can draw (from /api/geo). `blockingByCode` decides which of those get
+// a marker and what colour it is — the globe no longer reads sanctions_tier, so
+// the researched policy dossiers are deliberately not a prop.
+export default function Globe({
+  blockingByCode = {},
+  geoByCode = {},
+  outages = [],
+  onCountrySelect,
+  onLoadError,
+  layer = 'ALL',
+}) {
   const containerRef = useRef(null)
   const viewerRef = useRef(null)
   const markerStateRef = useRef({})
-  const blockingMapRef = useRef({})
+  const outageStateRef = useRef({})
   const [ready, setReady] = useState(false)
 
   // Keep the latest callbacks in refs so the init effect (which only runs
@@ -155,29 +174,10 @@ export default function Globe({ onCountrySelect, onLoadError, layer = 'ALL' }) {
 
       viewerRef.current = viewer
 
-      // Fly to MENA on load
       viewer.camera.flyTo({
-        destination: Cesium.Cartesian3.fromDegrees(45.0, 28.0, 4200000),
+        destination: Cesium.Cartesian3.fromDegrees(HOME_VIEW.lon, HOME_VIEW.lat, HOME_VIEW.height),
         duration: 0,
       })
-
-      // Fetch tier data from backend
-      const countriesResponse = await fetch('/api/countries')
-      if (!countriesResponse.ok) throw new Error('Failed to load countries for globe view')
-      const countries = await countriesResponse.json()
-      if (cancelled) return
-      const tierMap = Object.fromEntries(countries.map(c => [c.country_code, c.sanctions_tier]))
-
-      // Blocking status per country/layer, used to recolor markers below.
-      // Non-fatal if it fails — markers just fall back to tier coloring.
-      try {
-        const blockingResponse = await fetch('/api/blocking')
-        const blockingRows = blockingResponse.ok ? await blockingResponse.json() : []
-        blockingMapRef.current = buildBlockingMap(blockingRows, Object.keys(COUNTRY_CENTROIDS))
-      } catch {
-        blockingMapRef.current = {}
-      }
-      if (cancelled) return
 
       // Load accurate, locally-bundled world borders from world-atlas
       const worldData = await import('world-atlas/countries-50m.json')
@@ -207,60 +207,23 @@ export default function Globe({ onCountrySelect, onLoadError, layer = 'ALL' }) {
         }
       })
 
-      // Pulsing intelligence markers at each supported country centroid.
+      // Markers are built by their own effect, from props — see below. This
+      // effect owns only what the scene needs once: the viewer, the borders,
+      // the animation loop and the input handlers.
       const markerState = markerStateRef.current
-
-      Object.entries(COUNTRY_CENTROIDS).forEach(([code, [lng, lat]]) => {
-        const tier = tierMap[code]
-        if (!tier) return
-        const hex = TIER_COLORS[tier]
-        const position = Cesium.Cartesian3.fromDegrees(lng, lat)
-
-        const ringEntity = viewer.entities.add({
-          position,
-          properties: { code },
-          billboard: {
-            image: drawRingCanvas(hex),
-            width: 24,
-            height: 24,
-            color: Cesium.Color.fromCssColorString(hex),
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          },
-        })
-
-        const dotEntity = viewer.entities.add({
-          position,
-          properties: { code },
-          billboard: {
-            image: drawDotCanvas(hex),
-            width: 10,
-            height: 10,
-            color: Cesium.Color.fromCssColorString(hex),
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          },
-        })
-
-        markerState[code] = {
-          ringEntity,
-          dotEntity,
-          tierColor: hex,
-          effectiveColor: hex,
-          effectiveAlpha: 1,
-          hovered: false,
-          flareStart: null,
-        }
-      })
 
       const preRenderCallback = () => {
         const now = performance.now()
         const cycle = (now % PULSE_PERIOD_MS) / PULSE_PERIOD_MS
 
         Object.values(markerState).forEach((m) => {
-          const alpha = m.effectiveAlpha ?? 1
-          const colorHex = m.effectiveColor ?? m.tierColor
+          const alpha = m.alpha ?? 1
 
-          m.ringEntity.billboard.scale = 1 + 0.4 * cycle
-          m.ringEntity.billboard.color = Cesium.Color.fromCssColorString(colorHex).withAlpha((1 - cycle) * alpha)
+          // Inconclusive markers are dot-only, so guard the ring.
+          if (m.ringEntity) {
+            m.ringEntity.billboard.scale = 1 + 0.4 * cycle
+            m.ringEntity.billboard.color = m.color.withAlpha((1 - cycle) * alpha)
+          }
 
           let dotScale = 1
           if (m.flareStart != null) {
@@ -273,11 +236,21 @@ export default function Globe({ onCountrySelect, onLoadError, layer = 'ALL' }) {
             }
           }
 
-          const baseColor = Cesium.Color.fromCssColorString(colorHex).withAlpha(alpha)
+          const baseColor = m.color.withAlpha(alpha)
           m.dotEntity.billboard.scale = dotScale * (m.hovered ? 1.15 : 1)
           m.dotEntity.billboard.color = m.hovered
             ? Cesium.Color.clone(baseColor).brighten(0.5, new Cesium.Color())
             : baseColor
+        })
+
+        // Outage markers: an expanding, fading crimson ring — a radar "ping"
+        // over any country IODA currently reports disrupted. Kept in their own
+        // state object (referenced via the ref, so this once-created closure
+        // still sees rebuilds) and deliberately not clickable.
+        const outageCycle = (now % OUTAGE_PULSE_PERIOD_MS) / OUTAGE_PULSE_PERIOD_MS
+        Object.values(outageStateRef.current).forEach((o) => {
+          o.ringEntity.billboard.scale = 0.8 + 1.4 * outageCycle
+          o.ringEntity.billboard.color = CESIUM_CRIMSON.withAlpha((1 - outageCycle) * 0.9)
         })
       }
 
@@ -308,7 +281,7 @@ export default function Globe({ onCountrySelect, onLoadError, layer = 'ALL' }) {
         }
       }, Cesium.ScreenSpaceEventType.MOUSE_MOVE)
 
-      // Click → flare, fly to country, report selection up
+      // Click → flare, fly to country (framed from its bbox), report selection up
       handler.setInputAction(({ position }) => {
         const picked = viewer.scene.pick(position)
         const code   = picked?.id?.properties?.code?.getValue()
@@ -316,11 +289,13 @@ export default function Globe({ onCountrySelect, onLoadError, layer = 'ALL' }) {
 
         markerState[code].flareStart = performance.now()
 
-        const [lng, lat] = COUNTRY_CENTROIDS[code]
-        viewer.camera.flyTo({
-          destination: Cesium.Cartesian3.fromDegrees(lng, lat, FLY_ALTITUDE[code] ?? 2000000),
-          duration: 1.2,
-        })
+        const geo = markerState[code].geo
+        if (geo && geo.centroid_lon != null && geo.centroid_lat != null) {
+          viewer.camera.flyTo({
+            destination: Cesium.Cartesian3.fromDegrees(geo.centroid_lon, geo.centroid_lat, altitudeFor(geo)),
+            duration: 1.2,
+          })
+        }
 
         onCountrySelectRef.current?.(code)
       }, Cesium.ScreenSpaceEventType.LEFT_CLICK)
@@ -345,29 +320,111 @@ export default function Globe({ onCountrySelect, onLoadError, layer = 'ALL' }) {
     }
   }, [])
 
-  // Recolor markers for the active layer: blocked technologies override the
-  // tier color, while no-data/inconclusive countries dim rather than change hue.
+  // Markers, rebuilt whenever the data or active layer changes. Driven by
+  // `blockingByCode` (which countries have a signal, and what it is) positioned
+  // via `geoByCode` centroids — so this scales to every country the moment its
+  // measurements land, with no hardcoded roster. Rebuilding on `layer` change
+  // is what recolours/reshapes markers for the selected layer.
   useEffect(() => {
     if (!ready) return
+    const viewer = viewerRef.current
+    if (!viewer || viewer.isDestroyed()) return
 
-    Object.entries(markerStateRef.current).forEach(([code, m]) => {
-      const status = blockingMapRef.current[code]?.[layer] ?? 'NO_DATA'
+    const markerState = markerStateRef.current
 
-      if (status === 'CONFIRMED_BLOCKED') {
-        m.effectiveColor = CRIMSON
-        m.effectiveAlpha = 1
-      } else if (status === 'LIKELY_BLOCKED') {
-        m.effectiveColor = AMBER
-        m.effectiveAlpha = 1
-      } else if (status === 'ACCESSIBLE') {
-        m.effectiveColor = m.tierColor
-        m.effectiveAlpha = 1
-      } else {
-        m.effectiveColor = m.tierColor
-        m.effectiveAlpha = 0.4
+    // Mutated in place rather than reassigned: the input handlers in the scene
+    // effect close over this same object.
+    for (const [code, m] of Object.entries(markerState)) {
+      if (m.ringEntity) viewer.entities.remove(m.ringEntity)
+      if (m.dotEntity) viewer.entities.remove(m.dotEntity)
+      delete markerState[code]
+    }
+
+    for (const [code, entry] of Object.entries(blockingByCode)) {
+      const status = entry?.[layer] ?? 'NO_DATA'
+      // No marker for countries with no signal in the active layer — the
+      // outline is enough, and a marker per no-data country would bury the
+      // ones that mean something.
+      if (status === 'NO_DATA') continue
+
+      const geo = geoByCode[code]
+      if (!geo || geo.centroid_lon == null || geo.centroid_lat == null) continue
+
+      const hex = BLOCKING_STATUS_COLOR[status] ?? DIM
+      const color = cesiumColorFor(status)
+      const inconclusive = isInconclusive(status)
+      const position = Cesium.Cartesian3.fromDegrees(geo.centroid_lon, geo.centroid_lat)
+
+      let ringEntity = null
+      if (!inconclusive) {
+        ringEntity = viewer.entities.add({
+          position,
+          properties: { code },
+          billboard: {
+            image: ringCanvas(hex),
+            width: 24,
+            height: 24,
+            color,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+        })
       }
+
+      const dotEntity = viewer.entities.add({
+        position,
+        properties: { code },
+        billboard: {
+          image: dotCanvas(hex),
+          width: inconclusive ? 6 : 10,
+          height: inconclusive ? 6 : 10,
+          color,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+      })
+
+      markerState[code] = {
+        ringEntity,
+        dotEntity,
+        color,
+        alpha: inconclusive ? 0.55 : 1,
+        hovered: false,
+        flareStart: null,
+        geo,
+      }
+    }
+  }, [ready, blockingByCode, geoByCode, layer])
+
+  // Global internet-outage overlay, rebuilt whenever the active-outage set
+  // changes. Independent of the blocking markers so it can light up any country
+  // in the world; each entry carries its own centroid from /api/geo.
+  useEffect(() => {
+    if (!ready) return
+    const viewer = viewerRef.current
+    if (!viewer || viewer.isDestroyed()) return
+
+    const outageState = outageStateRef.current
+    for (const [code, o] of Object.entries(outageState)) {
+      viewer.entities.remove(o.ringEntity)
+      delete outageState[code]
+    }
+
+    outages.forEach((o) => {
+      if (o.lat == null || o.lon == null) return
+      const position = Cesium.Cartesian3.fromDegrees(o.lon, o.lat)
+      const ringEntity = viewer.entities.add({
+        position,
+        properties: { outage: true },
+        billboard: {
+          image: ringCanvas(CRIMSON),
+          width: 28,
+          height: 28,
+          color: CESIUM_CRIMSON,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+      })
+      outageState[o.code] = { ringEntity }
     })
-  }, [layer, ready])
+  }, [ready, outages])
 
   return <div ref={containerRef} className="w-full h-full" />
 }
