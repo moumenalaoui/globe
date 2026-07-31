@@ -235,7 +235,9 @@ export default function App() {
   // Command-bar counters — plain reflections of the datasets already loaded
   // above, computed here so the chrome adds no fetches of its own.
   const counts = {
-    countries: countries.length,
+    // The globe/dropdown cover every drawable country, so the counter reflects
+    // that (geo), not the small researched-dossier set (`countries`).
+    countries: geo.length,
     signals: blocking?.length ?? 0,
     outages: outages.length,
   }

@@ -4,7 +4,6 @@ import DealsChart from './DealsChart'
 import FreedomHouseChart from './FreedomHouseChart'
 import GlobalIndices from './GlobalIndices'
 import MessagingStatus from './MessagingStatus'
-import ModelLandscapeChart from './ModelLandscapeChart'
 import OutageTimeline from './OutageTimeline'
 import TimelineChart from './TimelineChart'
 import TorChart from './TorChart'
@@ -199,13 +198,6 @@ export default function CountrySidebar({ country, layer, onClose }) {
         <FreedomHouseChart countryCode={country.country_code} countryName={country.country_name} />
 
         <GlobalIndices countryCode={country.country_code} />
-
-        <section>
-          <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.1em', color: MUTED, marginBottom: 8 }}>
-            OPEN-WEIGHT MODEL LANDSCAPE (GLOBAL REFERENCE)
-          </div>
-          <ModelLandscapeChart />
-        </section>
 
         <section>
           <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.1em', color: MUTED, marginBottom: 8 }}>
