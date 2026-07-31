@@ -1,0 +1,23 @@
+# Rust
+target/
+**/*.rs.bk
+
+# SQLite — never commit the db file, seed data lives in JSON
+*.db
+*.sqlite
+*.db-shm
+*.db-wal
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
