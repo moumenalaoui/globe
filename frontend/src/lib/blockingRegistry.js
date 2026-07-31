@@ -69,22 +69,15 @@ export const BLOCKING_STATUS_LABEL = {
   NO_DATA: 'NO DATA',
 }
 
-// (country, technology) pairs the backend backfills a daily timeline for
-// (see TIMELINE_TARGETS in backend/src/fetchers/ooni.rs) — these are the
-// only pairs worth rendering a timeline chart for by default. Must be kept
-// in sync with the backend list; generated the same way (every circumvention
-// technology x every tracked country) rather than hand-listed, so the two
-// can't drift apart again.
-const TIMELINE_COUNTRIES = ['IR', 'SY', 'AE', 'SA', 'IQ']
-const TIMELINE_TECHNOLOGIES = ['torproject', 'signal', 'i2p', 'psiphon', 'torsf']
+// Technologies the backend backfills a daily blocking timeline for — the only
+// technologies worth rendering a sparkline for. Kept in sync with TIMELINE_TECHS
+// in backend/src/fetchers/ooni.rs. The backend now backfills these for *every*
+// country (grouped server-side by probe_cc), so there is no country allowlist:
+// a timeline exists for any country that has measurements. A chart therefore
+// renders whenever there are rows and hides itself when there aren't, rather
+// than being gated on a hardcoded five.
+const TIMELINE_TECHNOLOGIES = ['torproject', 'signal', 'i2p', 'psiphon', 'torsf', 'openai.com']
 
-export const TIMELINE_TARGETS = [
-  ...TIMELINE_COUNTRIES.flatMap((country) =>
-    TIMELINE_TECHNOLOGIES.map((technology) => ({ country, technology })),
-  ),
-  { country: 'IR', technology: 'openai.com' },
-]
-
-export function hasTimeline(countryCode, technology) {
-  return TIMELINE_TARGETS.some((t) => t.country === countryCode && t.technology === technology)
+export function hasTimeline(_countryCode, technology) {
+  return TIMELINE_TECHNOLOGIES.includes(technology)
 }

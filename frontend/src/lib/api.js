@@ -60,6 +60,15 @@ export async function getOutages({ country, active } = {}) {
   return r.json()
 }
 
+// Whole-world freedom-index ranking (V-Dem / RSF), names joined in.
+// `order: 'asc'` = least-free / most-censored first.
+export async function getRankings({ source = 'V_DEM', order = 'asc', limit = 200 } = {}) {
+  const params = new URLSearchParams({ source, order, limit: String(limit) })
+  const r = await fetch(`${BASE}/rankings?${params.toString()}`)
+  if (!r.ok) throw new Error('Failed to fetch rankings')
+  return r.json()
+}
+
 // Per-content-category censorship for a country (OONI web_connectivity
 // aggregated by Citizen Lab category_code), ordered most-censored first.
 export async function getCategories(countryCode) {

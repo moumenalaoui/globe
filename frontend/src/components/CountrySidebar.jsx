@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import CategoryBreakdown from './CategoryBreakdown'
 import DealsChart from './DealsChart'
 import FreedomHouseChart from './FreedomHouseChart'
@@ -204,22 +204,24 @@ export default function CountrySidebar({ country, layer, onClose }) {
                   {GROUP_LABELS[group]}
                 </p>
                 {techs.map((tech) => (
-                  <Fragment key={tech}>
-                    <BlockingTechRow
-                      tech={tech}
-                      row={blockingByTech[tech]}
-                      countryCode={country.country_code}
-                      timelineRows={timelineByTech[tech]}
-                    />
-                    {group === 'CIRCUMVENTION' && tech === 'tor' && (
-                      <TorChart countryCode={country.country_code} />
-                    )}
-                  </Fragment>
+                  <BlockingTechRow
+                    key={tech}
+                    tech={tech}
+                    row={blockingByTech[tech]}
+                    countryCode={country.country_code}
+                    timelineRows={timelineByTech[tech]}
+                  />
                 ))}
               </div>
             ))}
           </section>
         )}
+
+        {/* Tor relay/bridge usage. Rendered from its own /api/tor-metrics data
+            (it returns null when empty) rather than gated on a "meaningful" tor
+            blocking row, so it surfaces for every country that has Tor data —
+            not just those with a point-in-time blocking classification. */}
+        <TorChart countryCode={country.country_code} />
 
         <MessagingStatus countryCode={country.country_code} />
 

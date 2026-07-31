@@ -3,77 +3,13 @@ import Globe from './components/Globe'
 import CountrySidebar from './components/CountrySidebar'
 import BlockingHeatmap from './components/BlockingHeatmap'
 import OutageFeed from './components/OutageFeed'
+import GlobalRanking from './components/GlobalRanking'
+import CommandBar from './components/CommandBar'
+import StatusBar from './components/StatusBar'
 import { buildBlockingMap } from './lib/blockingRegistry'
 import { getBlocking, getCountries, getCountry, getGeo, getOutages } from './lib/api'
-import { BLACK, BORDER, CRIMSON, HIGHLIGHT, MONO, MUTED, SIDEBAR, WHITE } from './theme'
+import { BASE, BORDER, MONO, MUTED, SIDEBAR } from './theme'
 import './App.css'
-
-const LAYER_OPTIONS = [
-  { value: 'AI_ACCESS', label: 'AI ACCESS' },
-  { value: 'CIRCUMVENTION', label: 'CIRCUMVENTION' },
-  { value: 'ALL', label: 'ALL' },
-]
-
-// Literal per-spec toggle colors — close to, but distinct from, the rest of
-// the app's border/muted tokens, so kept local rather than folded into theme.
-const TOGGLE_BORDER = '#1e3258'
-const TOGGLE_MUTED = '#8892a4'
-
-function LayerToggle({ label, active, onClick }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      style={{
-        background: 'transparent',
-        border: `1px solid ${active ? HIGHLIGHT : TOGGLE_BORDER}`,
-        color: active ? HIGHLIGHT : TOGGLE_MUTED,
-        fontFamily: MONO,
-        fontSize: 10,
-        letterSpacing: '0.1em',
-        padding: '4px 10px',
-        borderRadius: 0,
-        cursor: 'pointer',
-      }}
-    >
-      {label}
-    </button>
-  )
-}
-
-function TopBarSelect({ ariaLabel, value, options, placeholder, onChange }) {
-  return (
-    <select
-      aria-label={ariaLabel}
-      value={value}
-      onChange={(event) => onChange(event.target.value)}
-      style={{
-        height: 32,
-        background: BLACK,
-        border: `1px solid ${BORDER}`,
-        borderRadius: 0,
-        color: WHITE,
-        fontFamily: MONO,
-        fontSize: 11,
-        letterSpacing: '0.05em',
-        padding: '0 8px',
-        outline: 'none',
-      }}
-    >
-      {placeholder && (
-        <option value="" disabled style={{ background: BLACK, color: MUTED }}>
-          {placeholder}
-        </option>
-      )}
-      {options.map((option) => (
-        <option key={option.value} value={option.value} style={{ background: BLACK, color: WHITE }}>
-          {option.label}
-        </option>
-      ))}
-    </select>
-  )
-}
 
 export default function App() {
   // `countries` and `blocking` are owned here and passed down, rather than
@@ -92,6 +28,10 @@ export default function App() {
   const [layer, setLayer] = useState('ALL')
   const [geo, setGeo] = useState([])
   const [outages, setOutages] = useState([])
+  // Timestamp of the most recent successful primary fetch. Display-only: drives
+  // the "LAST SYNC" readout in the status bar and nothing else. Stamped in each
+  // load effect below; it changes when data actually arrives, never on a timer.
+  const [lastSync, setLastSync] = useState(null)
 
   useEffect(() => {
     let cancelled = false
@@ -105,6 +45,7 @@ export default function App() {
         if (cancelled) return
 
         setCountries(result)
+        setLastSync(Date.now())
       } catch (error) {
         if (cancelled) return
         setCountriesError(error instanceof Error ? error.message : 'Failed to load countries')
@@ -130,7 +71,10 @@ export default function App() {
 
     getBlocking()
       .then((rows) => {
-        if (!cancelled) setBlocking(rows)
+        if (!cancelled) {
+          setBlocking(rows)
+          setLastSync(Date.now())
+        }
       })
       .catch(() => {
         if (!cancelled) setBlocking([])
@@ -153,7 +97,10 @@ export default function App() {
 
     getGeo()
       .then((rows) => {
-        if (!cancelled) setGeo(rows)
+        if (!cancelled) {
+          setGeo(rows)
+          setLastSync(Date.now())
+        }
       })
       .catch(() => {
         if (!cancelled) setGeo([])
@@ -208,6 +155,7 @@ export default function App() {
 
         const aggregated = [...byCountry.values()].sort((a, b) => b.latestStart - a.latestStart)
         setOutages(aggregated)
+        setLastSync(Date.now())
       })
       .catch(() => {
         if (!cancelled) setOutages([])
@@ -257,48 +205,28 @@ export default function App() {
     || (isLoadingCountries && 'Loading country data...')
     || (isLoadingSelection && 'Refreshing country...')
 
+  // Command-bar counters — plain reflections of the datasets already loaded
+  // above, computed here so the chrome adds no fetches of its own.
+  const counts = {
+    countries: countries.length,
+    signals: blocking?.length ?? 0,
+    outages: outages.length,
+  }
+
+  // Status-bar link state, derived from the same country-load flags that gate
+  // the rest of the UI — not a separate health check.
+  const linkStatus = countriesError ? 'error' : isLoadingCountries ? 'loading' : 'ok'
+
   return (
-    <div style={{ background: BLACK, height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <header
-        style={{
-          height: 44,
-          flexShrink: 0,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 20,
-          padding: '0 16px',
-          background: SIDEBAR,
-          borderBottom: `1px solid ${BORDER}`,
-        }}
-      >
-        <span style={{ fontFamily: MONO, fontSize: 11, color: WHITE, letterSpacing: '0.1em', whiteSpace: 'nowrap' }}>
-          Censorship Tracker 
-        </span>
-
-        <div style={{ display: 'flex', gap: 8 }}>
-          <TopBarSelect
-            ariaLabel="Country"
-            value={selectedCode}
-            placeholder="Select country"
-            options={countries.map((c) => ({ value: c.country_code, label: c.country_name }))}
-            onChange={setSelectedCode}
-          />
-        </div>
-
-        <div style={{ display: 'flex', gap: 6 }}>
-          {LAYER_OPTIONS.map((option) => (
-            <LayerToggle
-              key={option.value}
-              label={option.label}
-              active={layer === option.value}
-              onClick={() => setLayer(option.value)}
-            />
-          ))}
-        </div>
-
-        <span style={{ marginLeft: 'auto', fontFamily: MONO, fontSize: 11, color: CRIMSON, letterSpacing: '0.1em' }}>
-        </span>
-      </header>
+    <div style={{ background: BASE, height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <CommandBar
+        countries={countries}
+        selectedCode={selectedCode}
+        onSelectCountry={setSelectedCode}
+        layer={layer}
+        onLayerChange={setLayer}
+        counts={counts}
+      />
 
       <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
         <main style={{ position: 'relative', flex: 1, overflow: 'hidden' }}>
@@ -315,6 +243,8 @@ export default function App() {
           <BlockingHeatmap countries={countries} rows={blocking} />
 
           <OutageFeed outages={outages} />
+
+          <GlobalRanking />
 
           {statusMessage && (
             <div
@@ -374,6 +304,8 @@ export default function App() {
           </aside>
         )}
       </div>
+
+      <StatusBar status={linkStatus} lastSync={lastSync} />
     </div>
   )
 }
