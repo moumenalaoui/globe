@@ -33,7 +33,14 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 // as blocked forever.
 const POINT_IN_TIME_WINDOW_DAYS: i64 = 90;
 
-// The historical charts start here. Shared by the timeline and category sweeps.
+// The per-content-category sweep is a current-state snapshot (all rows carry
+// today's checked_date), like the technology blocks — so it reads a trailing
+// window rather than all history. That also keeps the heavy 2-D category
+// aggregation small enough that OONI's gateway doesn't time it out (504); the
+// full-history version reliably 504s.
+const CATEGORY_WINDOW_DAYS: i64 = 180;
+
+// The historical timeline charts start here.
 const TIMELINE_SINCE: &str = "2024-01-01";
 
 const TARGET_URLS: [&str; 4] = [
@@ -605,11 +612,12 @@ async fn fetch_and_store_categories(state: &AppState, known: &HashSet<String>) -
         .timeout(REQUEST_TIMEOUT)
         .build()?;
 
+    let since = days_ago_iso(CATEGORY_WINDOW_DAYS);
     let query = [
         ("test_name", "web_connectivity"),
         ("axis_x", "category_code"),
         ("axis_y", "probe_cc"),
-        ("since", TIMELINE_SINCE),
+        ("since", since.as_str()),
     ];
 
     let cells = fetch_aggregation(&client, &query).await?;
