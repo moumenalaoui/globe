@@ -1,0 +1,38 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #000000;
+  color: #e6e9ef;
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+/* Globe.jsx sizes its Cesium container with `className="w-full h-full"`, but
+   the project has no Tailwind build. Rather than pull in a whole utility
+   framework for two declarations, they're defined here — without them the
+   container collapses to zero height and the globe renders invisibly. */
+.w-full {
+  width: 100%;
+}
+
+.h-full {
+  height: 100%;
+}
