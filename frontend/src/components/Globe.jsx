@@ -45,6 +45,23 @@ const CESIUM_DIM = Cesium.Color.fromCssColorString(DIM)
 const CESIUM_CRIMSON = Cesium.Color.fromCssColorString(CRIMSON)
 const CESIUM_HIGHLIGHT = Cesium.Color.fromCssColorString(HIGHLIGHT)
 
+// Choropleth ramp for the composite censorship index (0 = free → 100 = most
+// censored): green → amber → crimson. Local constants so this doesn't depend on
+// the shared theme import line. The fill is translucent so borders and markers
+// still read on top.
+const CHORO_LOW = Cesium.Color.fromCssColorString('#6c9a5b')
+const CHORO_MID = Cesium.Color.fromCssColorString('#d97706')
+const CHORO_HIGH = Cesium.Color.fromCssColorString('#c8102e')
+const CHORO_ALPHA = 0.55
+
+function choroplethColor(censorship) {
+  const t = Math.max(0, Math.min(100, censorship)) / 100
+  const c = t <= 0.5
+    ? Cesium.Color.lerp(CHORO_LOW, CHORO_MID, t / 0.5, new Cesium.Color())
+    : Cesium.Color.lerp(CHORO_MID, CHORO_HIGH, (t - 0.5) / 0.5, new Cesium.Color())
+  return c.withAlpha(CHORO_ALPHA)
+}
+
 function cesiumColorFor(status) {
   return CESIUM_STATUS_COLOR[status] ?? CESIUM_DIM
 }
@@ -114,6 +131,8 @@ export default function Globe({
   blockingByCode = {},
   geoByCode = {},
   outages = [],
+  indexByCode = {},
+  showIndex = true,
   onCountrySelect,
   onLoadError,
   layer = 'ALL',
@@ -123,6 +142,11 @@ export default function Globe({
   const viewerRef = useRef(null)
   const markerStateRef = useRef({})
   const outageStateRef = useRef({})
+  // Choropleth: the loaded basemap geojson is stashed here in init so the
+  // fill effect (which reacts to index data arriving later) can reuse it, and
+  // the current fill Primitive is tracked so it can be swapped/removed.
+  const geojsonRef = useRef(null)
+  const choroplethRef = useRef(null)
   const [ready, setReady] = useState(false)
 
   // Keep the latest callbacks in refs so the init effect (which only runs
@@ -194,8 +218,11 @@ export default function Globe({
       const worldData = await import('world-atlas/countries-50m.json')
       if (cancelled) return
       const geojson = topojson.feature(worldData.default, worldData.default.objects.countries)
+      // Stashed for the choropleth fill effect, which needs this geometry but
+      // runs separately so it can react to index data that arrives after init.
+      geojsonRef.current = geojson
 
-      // Thin outline-only borders for every country — no choropleth fills.
+      // Thin outline-only borders for every country.
       const outlineCollection = new Cesium.PolylineCollection()
       viewer.scene.primitives.add(outlineCollection)
 
@@ -448,6 +475,68 @@ export default function Globe({
       outageState[o.code] = { ringEntity }
     })
   }, [ready, outages])
+
+  // Composite-index choropleth: fill every country whose score we have, from
+  // green (free) to crimson (most censored). Built as a single translucent
+  // Primitive (one draw, like the border collection) rather than hundreds of
+  // entities, and kept below the borders/markers by a small height offset.
+  // Rebuilt when the index data, geometry, or toggle changes.
+  useEffect(() => {
+    if (!ready) return
+    const viewer = viewerRef.current
+    if (!viewer || viewer.isDestroyed()) return
+    const geojson = geojsonRef.current
+    if (!geojson) return
+
+    if (choroplethRef.current) {
+      viewer.scene.primitives.remove(choroplethRef.current)
+      choroplethRef.current = null
+    }
+    if (!showIndex) return
+
+    // basemap features are keyed by ISO numeric; map those to our alpha-2 codes.
+    const numericToCode = new Map()
+    for (const [code, geo] of Object.entries(geoByCode)) {
+      if (geo && geo.iso_numeric != null) numericToCode.set(parseInt(geo.iso_numeric, 10), code)
+    }
+
+    const instances = []
+    const addRing = (ring, color) => {
+      if (!ring || ring.length < 3) return
+      const flat = []
+      for (const [lng, lat] of ring) flat.push(lng, lat)
+      instances.push(new Cesium.GeometryInstance({
+        geometry: new Cesium.PolygonGeometry({
+          polygonHierarchy: new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(flat)),
+          height: 600, // above the black globe (avoids z-fight), below borders (2000)
+          vertexFormat: Cesium.PerInstanceColorAppearance.VERTEX_FORMAT,
+        }),
+        attributes: { color: Cesium.ColorGeometryInstanceAttribute.fromColor(color) },
+      }))
+    }
+
+    for (const feature of geojson.features) {
+      const numeric = parseInt(feature.id, 10)
+      if (Number.isNaN(numeric)) continue
+      const code = numericToCode.get(numeric)
+      if (!code) continue
+      const score = indexByCode[code]
+      if (score == null) continue
+      const color = choroplethColor(score)
+      const g = feature.geometry
+      if (g.type === 'Polygon') addRing(g.coordinates[0], color)
+      else if (g.type === 'MultiPolygon') g.coordinates.forEach((poly) => addRing(poly[0], color))
+    }
+
+    if (instances.length === 0) return
+    const primitive = new Cesium.Primitive({
+      geometryInstances: instances,
+      appearance: new Cesium.PerInstanceColorAppearance({ flat: true, translucent: true }),
+      asynchronous: false,
+    })
+    viewer.scene.primitives.add(primitive)
+    choroplethRef.current = primitive
+  }, [ready, indexByCode, geoByCode, showIndex])
 
   // Reactive camera framing: the globe follows the app-wide selection, whatever
   // set it — a marker click here or the country dropdown in the header. A

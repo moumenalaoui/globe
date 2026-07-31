@@ -60,6 +60,14 @@ export async function getOutages({ country, active } = {}) {
   return r.json()
 }
 
+// Composite censorship index (0–100, higher = more censored) per country,
+// blended from V-Dem / RSF / Freedom House. Drives the globe choropleth.
+export async function getCensorshipIndex() {
+  const r = await fetch(`${BASE}/censorship-index`)
+  if (!r.ok) throw new Error('Failed to fetch censorship index')
+  return r.json()
+}
+
 // Whole-world freedom-index ranking (V-Dem / RSF), names joined in.
 // `order: 'asc'` = least-free / most-censored first.
 export async function getRankings({ source = 'V_DEM', order = 'asc', limit = 200 } = {}) {

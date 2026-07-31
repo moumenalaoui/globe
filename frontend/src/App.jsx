@@ -4,10 +4,11 @@ import CountrySidebar from './components/CountrySidebar'
 import BlockingHeatmap from './components/BlockingHeatmap'
 import OutageFeed from './components/OutageFeed'
 import GlobalRanking from './components/GlobalRanking'
+import IndexLegend from './components/IndexLegend'
 import CommandBar from './components/CommandBar'
 import StatusBar from './components/StatusBar'
 import { buildBlockingMap } from './lib/blockingRegistry'
-import { getBlocking, getCountries, getCountry, getGeo, getOutages } from './lib/api'
+import { getBlocking, getCensorshipIndex, getCountries, getCountry, getGeo, getOutages } from './lib/api'
 import { BASE, BORDER, MONO, MUTED, SIDEBAR } from './theme'
 import './App.css'
 
@@ -28,6 +29,10 @@ export default function App() {
   const [layer, setLayer] = useState('ALL')
   const [geo, setGeo] = useState([])
   const [outages, setOutages] = useState([])
+  // Composite censorship index (code -> 0–100) driving the globe choropleth,
+  // plus its on/off toggle (default on).
+  const [indexByCode, setIndexByCode] = useState({})
+  const [showIndex, setShowIndex] = useState(true)
   // Timestamp of the most recent successful primary fetch. Display-only: drives
   // the "LAST SYNC" readout in the status bar and nothing else. Stamped in each
   // load effect below; it changes when data actually arrives, never on a timer.
@@ -115,6 +120,26 @@ export default function App() {
     () => Object.fromEntries(geo.map((g) => [g.country_code, g])),
     [geo],
   )
+
+  // Composite censorship index for the choropleth. Non-fatal: on failure the
+  // globe simply renders without fills.
+  useEffect(() => {
+    let cancelled = false
+
+    getCensorshipIndex()
+      .then((rows) => {
+        if (cancelled) return
+        setIndexByCode(Object.fromEntries(rows.map((r) => [r.country_code, r.censorship_score])))
+        setLastSync(Date.now())
+      })
+      .catch(() => {
+        if (!cancelled) setIndexByCode({})
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // Live internet-outage overlay. Fetches currently-active IODA events plus
   // every country's centroid, then aggregates events to one entry per country
@@ -217,10 +242,18 @@ export default function App() {
   // the rest of the UI — not a separate health check.
   const linkStatus = countriesError ? 'error' : isLoadingCountries ? 'loading' : 'ok'
 
+  // Sidebar country: the full researched dossier when we have it; otherwise,
+  // once the dossier fetch has settled, the country_reference stub (code + name)
+  // from geoByCode — so a click on ANY globe marker or dropdown entry resolves,
+  // not just the handful of countries that have a /api/countries dossier row.
+  // While the dossier fetch is still in flight we intentionally hold at the
+  // loading state rather than flashing the stub first.
+  const sidebarCountry = selectedCountry || (!isLoadingSelection ? geoByCode[selectedCode] : null)
+
   return (
     <div style={{ background: BASE, height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <CommandBar
-        countries={countries}
+        countries={geo}
         selectedCode={selectedCode}
         onSelectCountry={setSelectedCode}
         layer={layer}
@@ -234,6 +267,8 @@ export default function App() {
             geoByCode={geoByCode}
             blockingByCode={blockingByCode}
             outages={outages}
+            indexByCode={indexByCode}
+            showIndex={showIndex}
             onCountrySelect={setSelectedCode}
             onLoadError={setGlobeError}
             layer={layer}
@@ -245,6 +280,8 @@ export default function App() {
           <OutageFeed outages={outages} />
 
           <GlobalRanking />
+
+          <IndexLegend show={showIndex} onToggle={() => setShowIndex((v) => !v)} />
 
           {statusMessage && (
             <div
@@ -273,9 +310,9 @@ export default function App() {
             selection. */}
         {selectedCode && (
           <aside style={{ width: 380, flexShrink: 0, height: '100%', overflow: 'hidden' }}>
-            {selectedCountry ? (
+            {sidebarCountry ? (
               <CountrySidebar
-                country={selectedCountry}
+                country={sidebarCountry}
                 layer={layer}
                 onClose={() => {
                   setSelectedCode('')
@@ -298,7 +335,7 @@ export default function App() {
                   color: MUTED,
                 }}
               >
-                Loading country...
+                {isLoadingSelection ? 'Loading country...' : (selectionError || 'Country data unavailable')}
               </div>
             )}
           </aside>

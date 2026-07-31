@@ -174,12 +174,18 @@ export default function CountrySidebar({ country, layer, onClose }) {
           </button>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-          <FieldTag color={tierColor}>{TIER_LABELS[country.sanctions_tier]}</FieldTag>
-        </div>
+        {/* The sanctions tier comes from the researched dossier (/api/countries),
+            which only the focus countries have. For every other country selected
+            from the globe/dropdown there's no tier, so the tag is hidden rather
+            than rendered blank. */}
+        {country.sanctions_tier && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+            <FieldTag color={tierColor}>{TIER_LABELS[country.sanctions_tier]}</FieldTag>
+          </div>
+        )}
 
         <p style={{ marginTop: 12, fontSize: 11, lineHeight: 1.5, color: MUTED }}>
-          This tool tracks how US and Chinese AI strategies are reshaping digital access across MENA, and where infrastructure-level censorship makes that access fragile.
+          This tool tracks how US and Chinese AI strategies are reshaping digital access worldwide, and where infrastructure-level censorship makes that access fragile.
         </p>
       </div>
 
