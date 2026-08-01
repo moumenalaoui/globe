@@ -4,20 +4,18 @@ use serde::Serialize;
 use std::collections::HashMap;
 
 // A transparent composite: blend the freedom indices we hold per country into a
-// single 0–100 score. Weights favour V-Dem (current, best coverage), then RSF,
-// then Freedom House (deepest but only a few countries). Missing components are
-// dropped and the remaining weights renormalised, so a country with only V-Dem
-// still gets a score. All three inputs are already 0–100 "higher = freer", so
-// the blend is too; the map colours by its inverse (censorship = 100 − freedom).
+// single 0–100 score. Weights favour V-Dem (current, best coverage) over RSF.
+// Missing components are dropped and the remaining weights renormalised, so a
+// country with only V-Dem still gets a score. Both inputs are already 0–100
+// "higher = freer", so the blend is too; the map colours by its inverse
+// (censorship = 100 − freedom).
 const W_VDEM: f64 = 0.5;
 const W_RSF: f64 = 0.3;
-const W_FH: f64 = 0.2;
 
 #[derive(Default)]
 struct Components {
     vdem: Option<f64>,
     rsf: Option<f64>,
-    fh: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -29,13 +27,12 @@ pub struct CensorshipIndexEntry {
     pub freedom_score: f64,
     pub vdem: Option<f64>,
     pub rsf: Option<f64>,
-    pub freedom_house: Option<f64>,
     pub component_count: i64,
 }
 
 /// Composite censorship index for every country that has at least one freedom
 /// index. Computed on the fly from `country_scores` so it always reflects the
-/// latest fetched V-Dem / RSF / Freedom House values.
+/// latest fetched V-Dem / RSF values.
 pub async fn list_censorship_index(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<CensorshipIndexEntry>>, StatusCode> {
@@ -46,7 +43,7 @@ pub async fn list_censorship_index(
     let mut stmt = conn
         .prepare(
             "SELECT country_code, source, score_overall FROM country_scores
-             WHERE source IN ('V_DEM','RSF','FREEDOM_HOUSE') AND score_overall IS NOT NULL",
+             WHERE source IN ('V_DEM','RSF') AND score_overall IS NOT NULL",
         )
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -67,7 +64,6 @@ pub async fn list_censorship_index(
         match source.as_str() {
             "V_DEM" => entry.vdem = Some(score),
             "RSF" => entry.rsf = Some(score),
-            "FREEDOM_HOUSE" => entry.fh = Some(score),
             _ => {}
         }
     }
@@ -87,7 +83,7 @@ fn compute(code: &str, c: &Components) -> Option<CensorshipIndexEntry> {
     let mut weight = 0.0;
     let mut count = 0i64;
 
-    for (value, w) in [(c.vdem, W_VDEM), (c.rsf, W_RSF), (c.fh, W_FH)] {
+    for (value, w) in [(c.vdem, W_VDEM), (c.rsf, W_RSF)] {
         if let Some(v) = value {
             weighted += v * w;
             weight += w;
@@ -107,7 +103,6 @@ fn compute(code: &str, c: &Components) -> Option<CensorshipIndexEntry> {
         freedom_score: round1(freedom),
         vdem: c.vdem,
         rsf: c.rsf,
-        freedom_house: c.fh,
         component_count: count,
     })
 }

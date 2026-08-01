@@ -78,19 +78,6 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
             source_notes        TEXT NOT NULL
         );
 
-        CREATE TABLE IF NOT EXISTS deals (
-            deal_id       TEXT PRIMARY KEY,
-            country_code  TEXT NOT NULL,
-            partner_type  TEXT NOT NULL,
-            partner_name  TEXT NOT NULL,
-            deal_date     TEXT NOT NULL,
-            deal_type     TEXT NOT NULL,
-            description   TEXT NOT NULL,
-            stack_layer   TEXT NOT NULL,
-            confidence    TEXT NOT NULL,
-            source_notes  TEXT NOT NULL
-        );
-
         CREATE TABLE IF NOT EXISTS adoption_signals (
             signal_id        TEXT PRIMARY KEY,
             country_code     TEXT NOT NULL,
@@ -129,6 +116,11 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
             PRIMARY KEY (country_code, technology, measurement_date)
         );
 
+        -- Per-transport columns are additive and nullable: Tor's combined CSV
+        -- lags the per-country one by a day or two, so a row can legitimately
+        -- have bridge_users but no transport split yet. Any change to the
+        -- columns below must also be added to db/migrations.rs — this block
+        -- only ever runs against a database that does not exist yet.
         CREATE TABLE IF NOT EXISTS tor_metrics (
             id TEXT PRIMARY KEY,
             country_code TEXT NOT NULL,
@@ -137,7 +129,13 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
             bridge_users INTEGER,
             bridge_relay_ratio REAL,
             blocking_signal TEXT,
-            source TEXT DEFAULT 'TOR_METRICS'
+            source TEXT DEFAULT 'TOR_METRICS',
+            obfs4_low INTEGER,
+            obfs4_high INTEGER,
+            snowflake_low INTEGER,
+            snowflake_high INTEGER,
+            webtunnel_low INTEGER,
+            webtunnel_high INTEGER
         );
 
         CREATE TABLE IF NOT EXISTS country_scores (

@@ -21,11 +21,19 @@ fn row_to_metric(row: &rusqlite::Row) -> rusqlite::Result<TorMetric> {
         bridge_relay_ratio: row.get(5)?,
         blocking_signal: row.get(6)?,
         source: row.get(7)?,
+        obfs4_low: row.get(8)?,
+        obfs4_high: row.get(9)?,
+        snowflake_low: row.get(10)?,
+        snowflake_high: row.get(11)?,
+        webtunnel_low: row.get(12)?,
+        webtunnel_high: row.get(13)?,
     })
 }
 
 const SELECT: &str = "SELECT id, country_code, date, relay_users, bridge_users,
-    bridge_relay_ratio, blocking_signal, source FROM tor_metrics
+    bridge_relay_ratio, blocking_signal, source,
+    obfs4_low, obfs4_high, snowflake_low, snowflake_high, webtunnel_low, webtunnel_high
+    FROM tor_metrics
     WHERE country_code = ?1 ORDER BY date ASC";
 
 pub async fn list_tor_metrics(

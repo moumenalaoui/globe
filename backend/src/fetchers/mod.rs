@@ -1,5 +1,4 @@
 pub mod cloudflare;
-pub mod freedom_house;
 pub mod indices;
 pub mod ioda;
 pub mod ooni;

@@ -10,7 +10,22 @@ use std::time::Duration;
 // globe is two downloads rather than two-per-country.
 const RELAY_ENDPOINT: &str = "https://metrics.torproject.org/userstats-relay-country.csv";
 const BRIDGE_ENDPOINT: &str = "https://metrics.torproject.org/userstats-bridge-country.csv";
+// Per-transport bridge estimates, broken down by country. This is the only
+// endpoint that crosses both dimensions: userstats-bridge-transport.csv has no
+// country column (its rows are global totals), and the two cross-cuts are
+// unsupported — bridge-transport.csv?country= and bridge-country.csv?transport=
+// both return "No data available for the given parameters".
+const COMBINED_ENDPOINT: &str = "https://metrics.torproject.org/userstats-bridge-combined.csv";
 const START_DATE: &str = "2024-01-01";
+
+// The transports rendered in the sidebar. `meek` is deliberately absent: it is
+// down to ~3k users globally and reports nothing at all for most countries, so
+// a meek row would be permanently blank. `webtunnel` has overtaken it and, in
+// several censored countries, Snowflake too. `<OR>`/`!<OR>` (unobfuscated) and
+// `obfs3` (retired) are aggregates/legacy and not surfaced.
+const TRANSPORT_OBFS4: &str = "obfs4";
+const TRANSPORT_SNOWFLAKE: &str = "snowflake";
+const TRANSPORT_WEBTUNNEL: &str = "webtunnel";
 
 // Tor's `end` parameter is INCLUSIVE (unlike OONI's exclusive `until`), so
 // today's date is the correct upper bound. This was previously a hardcoded
@@ -25,10 +40,12 @@ const USER_AGENT: &str = "Censorship Tracker";
 // A small, polite gap between the two requests (relay + bridge).
 const REQUEST_PACING: Duration = Duration::from_millis(300);
 
-// Tor Metrics renders these CSVs on demand. The whole-globe multi-year window
-// is ~6 MB and comes back in a few seconds, but there's no retry path here, so
-// the ceiling is sized to tolerate a slow render rather than to fail fast.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+// Tor Metrics renders these CSVs on demand. The relay and bridge downloads are
+// ~6 MB combined; the per-country-per-transport CSV is several times that (it
+// carries a row per country *per transport* per day), so the ceiling is sized
+// for the largest of the three rather than the smallest. There's no retry path
+// here, so it tolerates a slow render rather than failing fast.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
 struct RelayRecord {
     country: String,
@@ -43,6 +60,31 @@ struct BridgeRecord {
     users: i64,
 }
 
+struct CombinedRecord {
+    country: String,
+    date: String,
+    transport: String,
+    low: Option<i64>,
+    high: Option<i64>,
+}
+
+/// Tor publishes per-transport figures as a low/high interval, not a point
+/// estimate — they are modelled from directory-request counts, so the width of
+/// the range is the published uncertainty. Both bounds are carried through to
+/// storage; the sidebar shows the midpoint.
+#[derive(Default, Clone, Copy)]
+struct TransportBounds {
+    low: Option<i64>,
+    high: Option<i64>,
+}
+
+#[derive(Default, Clone, Copy)]
+struct Transports {
+    obfs4: TransportBounds,
+    snowflake: TransportBounds,
+    webtunnel: TransportBounds,
+}
+
 struct TorRow {
     id: String,
     country: String,
@@ -51,6 +93,7 @@ struct TorRow {
     bridge_users: Option<i64>,
     ratio: f64,
     signal: &'static str,
+    transports: Transports,
 }
 
 /// Fetches the relay and bridge user-count CSVs for every country in two
@@ -97,6 +140,17 @@ pub async fn fetch_and_store(state: &AppState) -> Result<()> {
             Vec::new()
         }
     };
+    tokio::time::sleep(REQUEST_PACING).await;
+
+    // Independent of the other two: a failure here leaves the transport columns
+    // null rather than losing the relay/bridge totals that already parsed.
+    let combined_records = match fetch_combined_csv(&client).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            eprintln!("tor_metrics: failed to fetch combined transport CSV: {e}");
+            Vec::new()
+        }
+    };
 
     // Group by uppercased country, keeping only recognised ISO codes.
     let mut relay_by_country: HashMap<String, HashMap<String, (i64, Option<i64>)>> = HashMap::new();
@@ -119,21 +173,60 @@ pub async fn fetch_and_store(state: &AppState) -> Result<()> {
         bridge_by_country.entry(cc).or_default().insert(b.date, b.users);
     }
 
+    // Same country normalisation as the other two CSVs — the combined endpoint
+    // emits the identical lowercase alpha-2 column, plus the same `??`-style
+    // pseudo-codes, so uppercasing and filtering against known_codes joins it
+    // to the relay/bridge rows without a separate mapping.
+    let mut transports_by_country: HashMap<String, HashMap<String, Transports>> = HashMap::new();
+    for c in combined_records {
+        let cc = c.country.to_uppercase();
+        if !known.contains(&cc) {
+            continue;
+        }
+        let bounds = TransportBounds {
+            low: c.low,
+            high: c.high,
+        };
+        let entry = transports_by_country
+            .entry(cc)
+            .or_default()
+            .entry(c.date)
+            .or_default();
+        match c.transport.as_str() {
+            TRANSPORT_OBFS4 => entry.obfs4 = bounds,
+            TRANSPORT_SNOWFLAKE => entry.snowflake = bounds,
+            TRANSPORT_WEBTUNNEL => entry.webtunnel = bounds,
+            // Every other transport (<OR>, !<OR>, obfs3, meek) is intentionally
+            // dropped — see the TRANSPORT_* consts.
+            _ => {}
+        }
+    }
+
     let countries: HashSet<String> = relay_by_country
         .keys()
         .chain(bridge_by_country.keys())
+        .chain(transports_by_country.keys())
         .cloned()
         .collect();
 
     let empty_relay: HashMap<String, (i64, Option<i64>)> = HashMap::new();
     let empty_bridge: HashMap<String, i64> = HashMap::new();
+    let empty_transports: HashMap<String, Transports> = HashMap::new();
 
     let mut rows: Vec<TorRow> = Vec::new();
     for country in &countries {
         let relay = relay_by_country.get(country).unwrap_or(&empty_relay);
         let bridge = bridge_by_country.get(country).unwrap_or(&empty_bridge);
+        let transports = transports_by_country
+            .get(country)
+            .unwrap_or(&empty_transports);
 
-        let mut dates: Vec<String> = relay.keys().chain(bridge.keys()).cloned().collect();
+        let mut dates: Vec<String> = relay
+            .keys()
+            .chain(bridge.keys())
+            .chain(transports.keys())
+            .cloned()
+            .collect();
         dates.sort();
         dates.dedup();
 
@@ -144,6 +237,7 @@ pub async fn fetch_and_store(state: &AppState) -> Result<()> {
             let bridge_users = bridge.get(&date).copied();
             let signal = classify_blocking(relay_users, lower);
             let ratio = bridge_users.unwrap_or(0) as f64 / (relay_users.unwrap_or(0) as f64 + 1.0);
+            let transports = transports.get(&date).copied().unwrap_or_default();
 
             rows.push(TorRow {
                 id: format!("{country}-{date}"),
@@ -153,6 +247,7 @@ pub async fn fetch_and_store(state: &AppState) -> Result<()> {
                 bridge_users,
                 ratio,
                 signal,
+                transports,
             });
         }
     }
@@ -289,6 +384,87 @@ async fn fetch_bridge_csv(client: &reqwest::Client) -> Result<Vec<BridgeRecord>>
     Ok(rows)
 }
 
+/// Per-country, per-transport bridge estimates. Unlike the other two CSVs this
+/// one reports `low`/`high` rather than `users`; both are kept.
+async fn fetch_combined_csv(client: &reqwest::Client) -> Result<Vec<CombinedRecord>> {
+    let url = format!("{COMBINED_ENDPOINT}?start={START_DATE}&end={}", end_date());
+    let body = client
+        .get(&url)
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+
+    // Columns: date,country,transport,low,high,frac
+    let mut reader = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .comment(Some(b'#'))
+        .from_reader(body.as_bytes());
+
+    let headers = reader.headers()?.clone();
+    let date_col = find_column(&headers, "date");
+    let country_col = find_column(&headers, "country");
+    let transport_col = find_column(&headers, "transport");
+    let low_col = find_column(&headers, "low");
+    let high_col = find_column(&headers, "high");
+
+    let (Some(date_col), Some(country_col), Some(transport_col)) =
+        (date_col, country_col, transport_col)
+    else {
+        bail!("combined CSV missing required date/country/transport columns");
+    };
+    // Without at least one bound there is nothing to store, and silently
+    // writing null transports for every country would look like "no usage"
+    // rather than "the feed changed shape".
+    if low_col.is_none() && high_col.is_none() {
+        bail!("combined CSV missing both low and high columns");
+    }
+
+    let mut rows = Vec::new();
+    for record in reader.records() {
+        let record = record?;
+        let Some(date) = record
+            .get(date_col)
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+        else {
+            continue;
+        };
+        let Some(country) = record
+            .get(country_col)
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+        else {
+            continue;
+        };
+        let Some(transport) = record
+            .get(transport_col)
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+        else {
+            continue;
+        };
+        let low = low_col
+            .and_then(|c| record.get(c))
+            .and_then(parse_optional_int);
+        let high = high_col
+            .and_then(|c| record.get(c))
+            .and_then(parse_optional_int);
+        if low.is_none() && high.is_none() {
+            continue;
+        }
+        rows.push(CombinedRecord {
+            country: country.to_string(),
+            date: date.to_string(),
+            transport: transport.to_string(),
+            low,
+            high,
+        });
+    }
+    Ok(rows)
+}
+
 fn find_column(headers: &csv::StringRecord, name: &str) -> Option<usize> {
     headers
         .iter()
@@ -332,8 +508,9 @@ fn insert_tor_metrics(state: &AppState, rows: &[TorRow]) -> Result<()> {
     {
         let mut stmt = tx.prepare(
             "INSERT OR REPLACE INTO tor_metrics
-             (id, country_code, date, relay_users, bridge_users, bridge_relay_ratio, blocking_signal, source)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+             (id, country_code, date, relay_users, bridge_users, bridge_relay_ratio, blocking_signal, source,
+              obfs4_low, obfs4_high, snowflake_low, snowflake_high, webtunnel_low, webtunnel_high)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
         )?;
         for r in rows {
             stmt.execute(rusqlite::params![
@@ -345,6 +522,12 @@ fn insert_tor_metrics(state: &AppState, rows: &[TorRow]) -> Result<()> {
                 r.ratio,
                 r.signal,
                 "TOR_METRICS",
+                r.transports.obfs4.low,
+                r.transports.obfs4.high,
+                r.transports.snowflake.low,
+                r.transports.snowflake.high,
+                r.transports.webtunnel.low,
+                r.transports.webtunnel.high,
             ])?;
         }
     }

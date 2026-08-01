@@ -3,7 +3,6 @@ pub mod category_block;
 pub mod country;
 pub mod country_reference;
 pub mod country_score;
-pub mod deal;
 pub mod deployment;
 pub mod model_release;
 pub mod outage_event;

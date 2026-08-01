@@ -851,4 +851,4 @@ fn insert_timeline_rows(state: &AppState, technology: &str, rows: &[TimelineRow]
 }
 
 // Date helpers live in crate::util::date — see the import at the top of this
-// file. They were duplicated here and in freedom_house.rs.
+// file.

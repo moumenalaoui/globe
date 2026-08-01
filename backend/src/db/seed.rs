@@ -1,5 +1,5 @@
 use crate::models::{
-    country::Country, country_reference::CountryReference, deal::Deal, deployment::Status,
+    country::Country, country_reference::CountryReference, deployment::Status,
     model_release::ModelRelease, signal::AdoptionSignal,
 };
 use anyhow::{Context, Result};
@@ -23,7 +23,6 @@ pub fn load_all(conn: &Connection) -> Result<()> {
         load_country_reference(conn)?;
         load_countries(conn)?;
         load_models(conn)?;
-        load_deals(conn)?;
         load_signals(conn)?;
         load_services(conn)?;
         load_service_channels(conn)?;
@@ -125,28 +124,6 @@ fn load_models(conn: &Connection) -> Result<()> {
                 r.telemetry_risk_default,
                 r.confidence,
                 r.huggingface_repo_id,
-                r.source_notes,
-            ],
-        )?;
-    }
-    Ok(())
-}
-
-fn load_deals(conn: &Connection) -> Result<()> {
-    let rows: Vec<Deal> = read_seed("deals.json")?;
-    for r in rows {
-        conn.execute(
-            "INSERT OR IGNORE INTO deals VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
-            rusqlite::params![
-                r.deal_id,
-                r.country_code,
-                r.partner_type,
-                r.partner_name,
-                r.deal_date,
-                r.deal_type,
-                r.description,
-                r.stack_layer,
-                r.confidence,
                 r.source_notes,
             ],
         )?;

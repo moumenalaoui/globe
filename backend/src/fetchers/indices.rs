@@ -6,9 +6,8 @@ use std::time::Duration;
 
 // Two global freedom indices, sourced from Our World in Data's clean grapher
 // CSVs (which republish V-Dem and RSF per country-year). Both cover ~180
-// countries, so unlike the hand-entered Freedom House table these give the
-// whole world a baseline score — including Syria, which Freedom on the Net
-// does not rate. Stored in the shared `country_scores` table.
+// countries, giving the whole world a baseline score. Stored in the shared
+// `country_scores` table.
 //
 // OWID serves these behind a 301 to a canonical slug; reqwest follows
 // redirects by default. `csvType=full` returns every country-year.

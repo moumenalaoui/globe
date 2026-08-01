@@ -49,7 +49,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/countries/:code", get(api::countries::get_country))
         .route("/api/geo", get(api::geo::list_geo))
         .route("/api/models", get(api::models::list_models))
-        .route("/api/deals", get(api::deals::list_deals))
         .route("/api/evaluate", post(api::evaluate::evaluate))
         .route("/api/signals", get(api::signals::list_signals))
         .route("/api/blocking", get(api::blocking::list_blocking))

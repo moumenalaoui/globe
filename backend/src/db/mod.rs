@@ -1,4 +1,5 @@
 pub mod countries;
+pub mod migrations;
 pub mod schema;
 pub mod seed;
 
@@ -12,6 +13,10 @@ use std::time::Duration;
 /// things up.
 pub fn init_schema(conn: &Connection) -> Result<()> {
     schema::create_tables(conn)?;
+    // After create_tables (which only ever builds a *fresh* database) and
+    // before any read or seed, so an existing database has every column the
+    // rest of the code expects.
+    migrations::run(conn)?;
     seed::load_all(conn)?;
     assert_reference_covers_researched(conn)?;
     Ok(())
@@ -70,18 +75,13 @@ pub async fn run_fetchers(state: &AppState) {
         ),
         run_with_timeout(
             "tor_metrics",
-            120,
+            600,
             crate::fetchers::tor_metrics::fetch_and_store(state)
         ),
         run_with_timeout(
             "cloudflare",
             30,
             crate::fetchers::cloudflare::fetch_and_store(state)
-        ),
-        run_with_timeout(
-            "freedom_house",
-            30,
-            crate::fetchers::freedom_house::fetch_and_store(state)
         ),
         run_with_timeout("ioda", 180, crate::fetchers::ioda::fetch_and_store(state)),
         run_with_timeout(
