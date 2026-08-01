@@ -68,7 +68,7 @@ export default function CommandBar({ countries, selectedCode, onSelectCountry, c
       }}
     >
       <span style={{ fontFamily: SANS, fontWeight: 600, fontSize: 13, letterSpacing: '0.14em', color: WHITE }}>
-        CENSORSHIP TRACKER
+        BLACKOUT
       </span>
 
       <Divider />

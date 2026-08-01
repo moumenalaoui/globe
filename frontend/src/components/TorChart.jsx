@@ -49,6 +49,33 @@ function groupConsecutiveDates(dates, maxGapDays = 2) {
   return groups.map((group) => ({ start: group[0], end: group[group.length - 1] }))
 }
 
+// Tor publishes per-transport figures as a low/high interval, not a count.
+// The midpoint is what's shown; both bounds ride along in the API response and
+// in the title tooltip, so the published uncertainty isn't lost.
+const TRANSPORTS = [
+  { label: 'obfs4', low: 'obfs4_low', high: 'obfs4_high' },
+  { label: 'Snowflake', low: 'snowflake_low', high: 'snowflake_high' },
+  { label: 'webtunnel', low: 'webtunnel_low', high: 'webtunnel_high' },
+]
+
+function midpoint(low, high) {
+  if (low == null && high == null) return null
+  if (low == null) return high
+  if (high == null) return low
+  return Math.round((low + high) / 2)
+}
+
+// The combined CSV lags the per-country one by a day or two, so the last row
+// overall often has no transport split. Walk back to the most recent row that
+// actually carries one rather than rendering an empty breakdown.
+function latestWithTransports(rows) {
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i]
+    if (TRANSPORTS.some((t) => row[t.low] != null || row[t.high] != null)) return row
+  }
+  return null
+}
+
 function formatMonthYear(dateStr) {
   const d = new Date(dateStr)
   if (Number.isNaN(d.getTime())) return dateStr
@@ -92,6 +119,7 @@ export default function TorChart({ countryCode }) {
   const highBlockingGroups = groupConsecutiveDates(
     rows.filter((r) => r.blocking_signal === 'HIGH_BLOCKING').map((r) => r.date)
   )
+  const transportRow = latestWithTransports(rows)
 
   return (
     <div style={{ width: '100%' }}>
@@ -184,6 +212,29 @@ export default function TorChart({ countryCode }) {
           <span style={{ color: MUTED }}>Bridge users (circumvention)</span>
         </div>
       </div>
+
+      {transportRow && (
+        <div style={{ display: 'flex', justifyContent: 'center', gap: 16, marginTop: 6, fontFamily: MONO, fontSize: 9 }}>
+          {TRANSPORTS.map((t) => {
+            const value = midpoint(transportRow[t.low], transportRow[t.high])
+            if (value == null) return null
+            const range =
+              transportRow[t.low] != null && transportRow[t.high] != null
+                ? `${transportRow[t.low].toLocaleString()}–${transportRow[t.high].toLocaleString()}`
+                : 'single bound'
+            return (
+              <div
+                key={t.label}
+                style={{ display: 'flex', gap: 4, cursor: 'help' }}
+                title={`${t.label} bridge users on ${transportRow.date} — Tor estimate range ${range}`}
+              >
+                <span style={{ color: MUTED }}>{t.label}</span>
+                <span style={{ color: WHITE }}>{value.toLocaleString()}</span>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

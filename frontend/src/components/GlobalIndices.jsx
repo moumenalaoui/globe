@@ -1,9 +1,7 @@
 import { useEffect, useState } from 'react'
 import { AMBER, CRIMSON, DIM, LOCAL, MONO, MUTED, WHITE } from '../theme'
 
-// Which sources this component renders, and how to label them. Freedom House
-// is intentionally excluded — FreedomHouseChart already renders its detailed
-// sub-scores above this.
+// Which sources this component renders, and how to label them.
 const SOURCES = [
   { key: 'V_DEM', label: 'V-Dem — Freedom of Expression' },
   { key: 'RSF', label: 'RSF — Press Freedom' },

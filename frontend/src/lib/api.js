@@ -61,7 +61,7 @@ export async function getOutages({ country, active } = {}) {
 }
 
 // Composite censorship index (0–100, higher = more censored) per country,
-// blended from V-Dem / RSF / Freedom House. Drives the globe choropleth.
+// blended from V-Dem / RSF. Drives the globe choropleth.
 export async function getCensorshipIndex() {
   const r = await fetch(`${BASE}/censorship-index`)
   if (!r.ok) throw new Error('Failed to fetch censorship index')
