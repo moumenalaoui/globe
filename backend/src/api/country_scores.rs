@@ -32,6 +32,10 @@ fn row_to_score(row: &rusqlite::Row) -> rusqlite::Result<CountryScore> {
         score_vdem_censorship: row.get(16)?,
         score_vdem_censorship_low: row.get(17)?,
         score_vdem_censorship_high: row.get(18)?,
+        score_pulse_infrastructure: row.get(19)?,
+        score_pulse_performance: row.get(20)?,
+        score_pulse_security: row.get(21)?,
+        score_pulse_market_readiness: row.get(22)?,
     })
 }
 
@@ -39,7 +43,9 @@ const SELECT: &str = "SELECT id, country_code, source, year, score_overall, scor
     score_content, score_rights, classification, last_updated,
     score_vdem_filtering, score_vdem_filtering_low, score_vdem_filtering_high,
     score_vdem_shutdown, score_vdem_shutdown_low, score_vdem_shutdown_high,
-    score_vdem_censorship, score_vdem_censorship_low, score_vdem_censorship_high
+    score_vdem_censorship, score_vdem_censorship_low, score_vdem_censorship_high,
+    score_pulse_infrastructure, score_pulse_performance, score_pulse_security,
+    score_pulse_market_readiness
     FROM country_scores
     WHERE country_code = ?1 ORDER BY year DESC, source ASC";
 

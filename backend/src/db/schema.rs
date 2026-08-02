@@ -164,7 +164,11 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
             score_vdem_shutdown_high REAL,
             score_vdem_censorship REAL,
             score_vdem_censorship_low REAL,
-            score_vdem_censorship_high REAL
+            score_vdem_censorship_high REAL,
+            score_pulse_infrastructure REAL,
+            score_pulse_performance REAL,
+            score_pulse_security REAL,
+            score_pulse_market_readiness REAL
         );
 
         CREATE TABLE IF NOT EXISTS services (

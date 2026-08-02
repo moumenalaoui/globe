@@ -47,6 +47,12 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("country_scores", "score_vdem_censorship", "REAL"),
     ("country_scores", "score_vdem_censorship_low", "REAL"),
     ("country_scores", "score_vdem_censorship_high", "REAL"),
+    // Internet Society Pulse resilience pillars, on ISOC_PULSE rows only.
+    // Stored 0-100 (the API reports 0-1); higher = more resilient.
+    ("country_scores", "score_pulse_infrastructure", "REAL"),
+    ("country_scores", "score_pulse_performance", "REAL"),
+    ("country_scores", "score_pulse_security", "REAL"),
+    ("country_scores", "score_pulse_market_readiness", "REAL"),
 ];
 
 /// Brings an existing database up to the current schema. Idempotent: safe to

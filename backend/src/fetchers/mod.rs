@@ -2,6 +2,7 @@ pub mod cloudflare;
 pub mod indices;
 pub mod ioda;
 pub mod ooni;
+pub mod pulse;
 pub mod tor_metrics;
 
 // Every fetcher now covers the whole globe by grouping/tagging country

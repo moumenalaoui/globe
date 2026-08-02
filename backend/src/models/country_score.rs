@@ -25,4 +25,10 @@ pub struct CountryScore {
     pub score_vdem_censorship: Option<f64>,
     pub score_vdem_censorship_low: Option<f64>,
     pub score_vdem_censorship_high: Option<f64>,
+    // Internet Resilience Index pillars, present on ISOC_PULSE rows only.
+    // Stored 0-100 (Pulse publishes 0-1); higher = more resilient.
+    pub score_pulse_infrastructure: Option<f64>,
+    pub score_pulse_performance: Option<f64>,
+    pub score_pulse_security: Option<f64>,
+    pub score_pulse_market_readiness: Option<f64>,
 }

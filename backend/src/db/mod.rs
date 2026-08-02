@@ -89,6 +89,7 @@ pub async fn run_fetchers(state: &AppState) {
             60,
             crate::fetchers::indices::fetch_and_store(state)
         ),
+        run_with_timeout("pulse", 90, crate::fetchers::pulse::fetch_and_store(state)),
     );
     println!("Background data fetchers finished.");
 }
