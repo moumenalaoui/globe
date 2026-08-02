@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react'
 import { AMBER, BORDER, BORDER_STRONG, CRIMSON, LOCAL, MONO, MUTED, SIDEBAR, WHITE } from '../theme'
 import { SOURCES } from '../lib/sources'
 
@@ -11,26 +10,21 @@ const LINK = {
   error: { color: CRIMSON, label: 'LINK ERR' },
 }
 
-function relSync(ms) {
-  if (!ms) return '—'
-  const s = Math.max(0, Math.round((Date.now() - ms) / 1000))
-  if (s < 60) return `${s}s ago`
-  const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m ${String(s % 60).padStart(2, '0')}s ago`
-  const h = Math.floor(m / 60)
-  return `${h}h ${String(m % 60).padStart(2, '0')}m ago`
+// Age of the underlying data, from /health. `last_updated` is stored as a
+// plain date, so whole days is the honest resolution — a seconds-level counter
+// here would imply a precision the pipeline does not have.
+function formatAge(dataAge) {
+  if (!dataAge || dataAge.age_days == null) return '—'
+  const days = dataAge.age_days
+  if (days <= 0) return 'today'
+  return days === 1 ? '1 day old' : `${days} days old`
 }
 
-export default function StatusBar({ status = 'ok', lastSync = null }) {
-  // Local 1s tick so "LAST SYNC" counts up without re-rendering the app. The
-  // value itself (lastSync) only changes when App actually completes a fetch.
-  const [, setTick] = useState(0)
-  useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 1000)
-    return () => clearInterval(id)
-  }, [])
-
+export default function StatusBar({ status = 'ok', dataAge = null }) {
   const link = LINK[status] ?? LINK.ok
+  // The backend already decided what counts as stale (HEALTH_MAX_AGE_DAYS);
+  // don't duplicate the threshold here, just colour by its verdict.
+  const stale = dataAge?.status === 'stale'
 
   return (
     <footer
@@ -63,8 +57,18 @@ export default function StatusBar({ status = 'ok', lastSync = null }) {
         <span style={{ color: link.color }}>{link.label}</span>
       </span>
       <span style={{ width: 1, height: 12, background: BORDER }} />
-      <span style={{ color: MUTED }}>
-        LAST SYNC <span className="tabular" style={{ color: WHITE }}>{relSync(lastSync)}</span>
+      <span
+        style={{ color: MUTED, cursor: dataAge?.newest_data ? 'help' : 'default' }}
+        title={
+          dataAge?.newest_data
+            ? `Newest fetched data: ${dataAge.newest_data} · stale after ${dataAge.max_age_days} day(s)`
+            : 'No fetched data yet'
+        }
+      >
+        DATA AGE{' '}
+        <span className="tabular" style={{ color: stale ? CRIMSON : WHITE }}>
+          {formatAge(dataAge)}
+        </span>
       </span>
     </footer>
   )

@@ -35,10 +35,30 @@ export default function App() {
   // plus its on/off toggle (default on).
   const [indexByCode, setIndexByCode] = useState({})
   const [showIndex, setShowIndex] = useState(true)
-  // Timestamp of the most recent successful primary fetch. Display-only: drives
-  // the "LAST SYNC" readout in the status bar and nothing else. Stamped in each
-  // load effect below; it changes when data actually arrives, never on a timer.
-  const [lastSync, setLastSync] = useState(null)
+  // Freshness of the DATA, not of the last network call. This used to be
+  // `Date.now()` stamped whenever a fetch returned, which meant the status bar
+  // read "3s ago" over a database that had not been refreshed in weeks — the
+  // readout was measuring the browser, not the pipeline. /health reports the
+  // newest `last_updated` across the fetched tables; that is the honest number.
+  const [dataAge, setDataAge] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    // /health is deliberately outside the auth layer and returns 503 when the
+    // data is stale — the body is what we want either way, so status is not
+    // checked here beyond parsing.
+    fetch('/health')
+      .then((r) => r.json())
+      .then((body) => {
+        if (!cancelled) setDataAge(body)
+      })
+      .catch(() => {
+        if (!cancelled) setDataAge(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -52,7 +72,6 @@ export default function App() {
         if (cancelled) return
 
         setCountries(result)
-        setLastSync(Date.now())
       } catch (error) {
         if (cancelled) return
         setCountriesError(error instanceof Error ? error.message : 'Failed to load countries')
@@ -80,7 +99,6 @@ export default function App() {
       .then((rows) => {
         if (!cancelled) {
           setBlocking(rows)
-          setLastSync(Date.now())
         }
       })
       .catch(() => {
@@ -106,7 +124,6 @@ export default function App() {
       .then((rows) => {
         if (!cancelled) {
           setGeo(rows)
-          setLastSync(Date.now())
         }
       })
       .catch(() => {
@@ -132,7 +149,6 @@ export default function App() {
       .then((rows) => {
         if (cancelled) return
         setIndexByCode(Object.fromEntries(rows.map((r) => [r.country_code, r.censorship_score])))
-        setLastSync(Date.now())
       })
       .catch(() => {
         if (!cancelled) setIndexByCode({})
@@ -182,7 +198,6 @@ export default function App() {
 
         const aggregated = [...byCountry.values()].sort((a, b) => b.latestStart - a.latestStart)
         setOutages(aggregated)
-        setLastSync(Date.now())
       })
       .catch(() => {
         if (!cancelled) setOutages([])
@@ -355,7 +370,7 @@ export default function App() {
         )}
       </div>
 
-      <StatusBar status={linkStatus} lastSync={lastSync} />
+      <StatusBar status={linkStatus} dataAge={dataAge} />
     </div>
   )
 }
