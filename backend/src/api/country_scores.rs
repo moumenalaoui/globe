@@ -23,11 +23,24 @@ fn row_to_score(row: &rusqlite::Row) -> rusqlite::Result<CountryScore> {
         score_rights: row.get(7)?,
         classification: row.get(8)?,
         last_updated: row.get(9)?,
+        score_vdem_filtering: row.get(10)?,
+        score_vdem_filtering_low: row.get(11)?,
+        score_vdem_filtering_high: row.get(12)?,
+        score_vdem_shutdown: row.get(13)?,
+        score_vdem_shutdown_low: row.get(14)?,
+        score_vdem_shutdown_high: row.get(15)?,
+        score_vdem_censorship: row.get(16)?,
+        score_vdem_censorship_low: row.get(17)?,
+        score_vdem_censorship_high: row.get(18)?,
     })
 }
 
 const SELECT: &str = "SELECT id, country_code, source, year, score_overall, score_access,
-    score_content, score_rights, classification, last_updated FROM country_scores
+    score_content, score_rights, classification, last_updated,
+    score_vdem_filtering, score_vdem_filtering_low, score_vdem_filtering_high,
+    score_vdem_shutdown, score_vdem_shutdown_low, score_vdem_shutdown_high,
+    score_vdem_censorship, score_vdem_censorship_low, score_vdem_censorship_high
+    FROM country_scores
     WHERE country_code = ?1 ORDER BY year DESC, source ASC";
 
 pub async fn list_country_scores(

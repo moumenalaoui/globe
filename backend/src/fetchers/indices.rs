@@ -1,6 +1,6 @@
 use crate::AppState;
 use crate::util::date::today_iso;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -15,6 +15,42 @@ const VDEM_URL: &str = "https://ourworldindata.org/grapher/freedom-of-expression
 const RSF_URL: &str = "https://ourworldindata.org/grapher/press-freedom-index-rsf.csv?csvType=full&useColumnShortNames=true";
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+// V-Dem's internet-censorship indicators, extracted from the Country-Year
+// Full+Others v16 dataset and committed as a seed. Two of the three are
+// Digital Society Project variables carried inside V-Dem; the third
+// (v2mecenefi) is a V-Dem core Media variable. OWID's mirror publishes one
+// indicator per grapher CSV and carries none of them, which is why this is a
+// committed file rather than another download.
+const DSP_SEED_PATH: &str = "data/seed/vdem_dsp_v16.csv";
+
+// Each variable is stored on its own ordinal scale, and the denominators are
+// NOT the same: v2mecenefi has four categories (0-3), the other two have five
+// (0-4). Normalising v2mecenefi against 4 would understate every country by a
+// quarter. All three are coded higher = LESS censorship, which already matches
+// this tool's "higher = more free" convention, so none of them is inverted —
+// despite names ("censorship effort", "filtering in practice") that read the
+// other way.
+const DSP_VARS: [(&str, f64); 3] = [
+    ("v2smgovfilprc", 4.0),
+    ("v2smgovshut", 4.0),
+    ("v2mecenefi", 3.0),
+];
+
+/// A point estimate with V-Dem's credible interval, all normalised 0-100.
+#[derive(Clone, Copy, Default)]
+struct Bounded {
+    point: Option<f64>,
+    low: Option<f64>,
+    high: Option<f64>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct DspScores {
+    filtering: Bounded,
+    shutdown: Bounded,
+    censorship: Bounded,
+}
 
 /// Fetches both indices and upserts the latest year per country into
 /// `country_scores`. Each source is independent — one failing does not stop
@@ -32,10 +68,21 @@ pub async fn fetch_and_store(state: &AppState) -> Result<()> {
         .user_agent("globe-censorship-tracker/0.1")
         .build()?;
 
-    if let Err(e) = fetch_source(state, &client, &alpha3, Source::Vdem).await {
+    // Local read, so a failure here shouldn't cost us the OWID scores — the
+    // V_DEM rows just carry no sub-scores.
+    let dsp = match load_dsp_seed(&alpha3) {
+        Ok(map) => map,
+        Err(e) => {
+            eprintln!("indices: V-Dem censorship seed unavailable: {e}");
+            HashMap::new()
+        }
+    };
+
+    if let Err(e) = fetch_source(state, &client, &alpha3, Source::Vdem, &dsp).await {
         eprintln!("indices: V-Dem fetch failed: {e}");
     }
-    if let Err(e) = fetch_source(state, &client, &alpha3, Source::Rsf).await {
+    // RSF rows carry no sub-scores; the V-Dem indicators belong to V_DEM only.
+    if let Err(e) = fetch_source(state, &client, &alpha3, Source::Rsf, &HashMap::new()).await {
         eprintln!("indices: RSF fetch failed: {e}");
     }
     Ok(())
@@ -124,11 +171,102 @@ fn rsf_band(raw: f64) -> String {
     label.to_string()
 }
 
+/// Reads the committed V-Dem seed and keys it by our alpha-2 code, using the
+/// same `alpha3_to_code` map the OWID indices already join through.
+///
+/// Unmatched rows are reported rather than dropped in silence: V-Dem carries
+/// historical and sub-state entities (Somaliland, Zanzibar, Republic of
+/// Vietnam) whose `country_text_id` is not ISO 3166-1, and those legitimately
+/// have nowhere to land — but a *large* miss count would mean the join broke,
+/// and that has to be visible.
+fn load_dsp_seed(alpha3: &HashMap<String, String>) -> Result<HashMap<String, DspScores>> {
+    let body = std::fs::read_to_string(DSP_SEED_PATH).with_context(|| {
+        format!("could not read `{DSP_SEED_PATH}` (the working directory must contain `data/seed/`)")
+    })?;
+
+    let mut reader = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .from_reader(body.as_bytes());
+    let headers = reader.headers()?.clone();
+
+    let col = |name: &str| headers.iter().position(|h| h.trim() == name);
+    let Some(code_col) = col("country_text_id") else {
+        anyhow::bail!("{DSP_SEED_PATH} missing country_text_id column");
+    };
+
+    // (point, low, high) column indices per variable, in DSP_VARS order.
+    let mut var_cols = Vec::new();
+    for (var, max) in DSP_VARS {
+        let point = col(&format!("{var}_osp"));
+        let low = col(&format!("{var}_osp_codelow"));
+        let high = col(&format!("{var}_osp_codehigh"));
+        let Some(point) = point else {
+            anyhow::bail!("{DSP_SEED_PATH} missing {var}_osp column");
+        };
+        var_cols.push((point, low, high, max));
+    }
+
+    let mut out: HashMap<String, DspScores> = HashMap::new();
+    let mut unmatched: Vec<String> = Vec::new();
+
+    for record in reader.records() {
+        let record = record?;
+        let iso3 = record.get(code_col).unwrap_or("").trim().to_uppercase();
+        if iso3.is_empty() {
+            continue;
+        }
+        let Some(country_code) = alpha3.get(&iso3) else {
+            unmatched.push(iso3);
+            continue;
+        };
+
+        // Normalised onto 0-100 against each variable's own maximum.
+        let read = |point: usize, low: Option<usize>, high: Option<usize>, max: f64| Bounded {
+            point: parse_normalised(record.get(point), max),
+            low: low.and_then(|c| parse_normalised(record.get(c), max)),
+            high: high.and_then(|c| parse_normalised(record.get(c), max)),
+        };
+
+        out.insert(
+            country_code.clone(),
+            DspScores {
+                filtering: read(var_cols[0].0, var_cols[0].1, var_cols[0].2, var_cols[0].3),
+                shutdown: read(var_cols[1].0, var_cols[1].1, var_cols[1].2, var_cols[1].3),
+                censorship: read(var_cols[2].0, var_cols[2].1, var_cols[2].2, var_cols[2].3),
+            },
+        );
+    }
+
+    if !unmatched.is_empty() {
+        unmatched.sort();
+        unmatched.dedup();
+        println!(
+            "indices: V-Dem seed matched {} countries; {} unmatched country_text_id (not ISO 3166-1): {}",
+            out.len(),
+            unmatched.len(),
+            unmatched.join(", ")
+        );
+    }
+    Ok(out)
+}
+
+/// `(osp / max) * 100`, rounded to 1dp and clamped. No inversion — see DSP_VARS.
+fn parse_normalised(raw: Option<&str>, max: f64) -> Option<f64> {
+    let value = raw?.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let osp = value.parse::<f64>().ok()?;
+    let score = (osp / max * 100.0).clamp(0.0, 100.0);
+    Some((score * 10.0).round() / 10.0)
+}
+
 async fn fetch_source(
     state: &AppState,
     client: &reqwest::Client,
     alpha3: &HashMap<String, String>,
     source: Source,
+    dsp: &HashMap<String, DspScores>,
 ) -> Result<()> {
     let body = client
         .get(source.url())
@@ -170,7 +308,8 @@ async fn fetch_source(
 
     let mut stored = 0usize;
     for (country_code, (year, raw)) in &latest {
-        if let Err(e) = insert_score(state, source, country_code, *year, *raw) {
+        if let Err(e) = insert_score(state, source, country_code, *year, *raw, dsp.get(country_code))
+        {
             eprintln!(
                 "indices: failed to store {} for {country_code}: {e}",
                 source.db_name()
@@ -192,19 +331,27 @@ fn insert_score(
     country_code: &str,
     year: i64,
     raw: f64,
+    dsp: Option<&DspScores>,
 ) -> Result<()> {
     let n = normalise(source, raw);
     // Keyed without the year so a re-run refreshes in place rather than
     // accumulating a row per year; the latest year is what we keep.
     let id = format!("{country_code}-{}", source.db_name());
+    let d = dsp.copied().unwrap_or_default();
 
     let conn = state
         .lock()
         .map_err(|_| anyhow::anyhow!("db lock poisoned"))?;
+    // The DSP sub-scores are written in this same statement rather than by a
+    // follow-up UPDATE: this is INSERT OR REPLACE, which deletes and re-inserts
+    // the row, so anything not listed here would be nulled on the next refresh.
     conn.execute(
         "INSERT OR REPLACE INTO country_scores
-         (id, country_code, source, year, score_overall, score_access, score_content, score_rights, classification, last_updated)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+         (id, country_code, source, year, score_overall, score_access, score_content, score_rights, classification, last_updated,
+          score_vdem_filtering, score_vdem_filtering_low, score_vdem_filtering_high,
+          score_vdem_shutdown, score_vdem_shutdown_low, score_vdem_shutdown_high,
+          score_vdem_censorship, score_vdem_censorship_low, score_vdem_censorship_high)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
         rusqlite::params![
             id,
             country_code,
@@ -216,6 +363,15 @@ fn insert_score(
             Option::<f64>::None,
             n.classification,
             today_iso(),
+            d.filtering.point,
+            d.filtering.low,
+            d.filtering.high,
+            d.shutdown.point,
+            d.shutdown.low,
+            d.shutdown.high,
+            d.censorship.point,
+            d.censorship.low,
+            d.censorship.high,
         ],
     )?;
     Ok(())

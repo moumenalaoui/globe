@@ -35,6 +35,18 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("tor_metrics", "snowflake_high", "INTEGER"),
     ("tor_metrics", "webtunnel_low", "INTEGER"),
     ("tor_metrics", "webtunnel_high", "INTEGER"),
+    // V-Dem / Digital Society Project internet-censorship sub-scores, on
+    // V_DEM rows only. Normalised 0-100 higher = freer; the _low/_high pairs
+    // are V-Dem's credible interval on that same scale.
+    ("country_scores", "score_vdem_filtering", "REAL"),
+    ("country_scores", "score_vdem_filtering_low", "REAL"),
+    ("country_scores", "score_vdem_filtering_high", "REAL"),
+    ("country_scores", "score_vdem_shutdown", "REAL"),
+    ("country_scores", "score_vdem_shutdown_low", "REAL"),
+    ("country_scores", "score_vdem_shutdown_high", "REAL"),
+    ("country_scores", "score_vdem_censorship", "REAL"),
+    ("country_scores", "score_vdem_censorship_low", "REAL"),
+    ("country_scores", "score_vdem_censorship_high", "REAL"),
 ];
 
 /// Brings an existing database up to the current schema. Idempotent: safe to

@@ -138,6 +138,13 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
             webtunnel_high INTEGER
         );
 
+        -- score_vdem_* carry the Digital Society Project / V-Dem internet
+        -- censorship indicators, populated only on V_DEM rows. All are
+        -- normalised 0-100 higher = freer, matching score_overall. The _low
+        -- and _high pairs are V-Dem's credible interval on the same 0-100
+        -- scale, kept so the modelled uncertainty stays recoverable.
+        -- Any change here must also go in db/migrations.rs — this block only
+        -- ever runs against a database that does not exist yet.
         CREATE TABLE IF NOT EXISTS country_scores (
             id TEXT PRIMARY KEY,
             country_code TEXT NOT NULL,
@@ -148,7 +155,16 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
             score_content REAL,
             score_rights REAL,
             classification TEXT,
-            last_updated TEXT
+            last_updated TEXT,
+            score_vdem_filtering REAL,
+            score_vdem_filtering_low REAL,
+            score_vdem_filtering_high REAL,
+            score_vdem_shutdown REAL,
+            score_vdem_shutdown_low REAL,
+            score_vdem_shutdown_high REAL,
+            score_vdem_censorship REAL,
+            score_vdem_censorship_low REAL,
+            score_vdem_censorship_high REAL
         );
 
         CREATE TABLE IF NOT EXISTS services (
