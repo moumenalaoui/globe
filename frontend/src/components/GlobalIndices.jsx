@@ -7,6 +7,17 @@ const SOURCES = [
   { key: 'RSF', label: 'RSF — Press Freedom' },
 ]
 
+// V-Dem's internet-censorship indicators, shown as sub-scores under the V-Dem
+// row. All three are coded higher = less censorship, so they read the same
+// direction as every other score here despite names ("censorship effort")
+// that suggest the opposite. V-Dem publishes a credible interval rather than a
+// point estimate; the point is shown and the interval kept on hover.
+const VDEM_SUBSCORES = [
+  { label: 'Filtering', key: 'score_vdem_filtering' },
+  { label: 'Shutdown', key: 'score_vdem_shutdown' },
+  { label: 'Censorship effort', key: 'score_vdem_censorship' },
+]
+
 // All scores are normalised to 0–100, higher = more free, so one colour ramp
 // reads consistently across indices.
 function scoreColor(score) {
@@ -70,6 +81,33 @@ export default function GlobalIndices({ countryCode }) {
                 <span style={{ fontFamily: MONO, fontSize: 9, color }}>{row.classification}</span>
                 <span style={{ fontFamily: MONO, fontSize: 9, color: MUTED }}>{Math.round(score)}/100 free</span>
               </div>
+
+              {key === 'V_DEM' && VDEM_SUBSCORES.some((s) => row[s.key] != null) && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 5 }}>
+                  {VDEM_SUBSCORES.map((s) => {
+                    const value = row[s.key]
+                    if (value == null) return null
+                    const low = row[`${s.key}_low`]
+                    const high = row[`${s.key}_high`]
+                    const interval =
+                      low != null && high != null
+                        ? `V-Dem credible interval ${low}–${high} of 100`
+                        : 'no published interval'
+                    return (
+                      <div
+                        key={s.key}
+                        style={{ display: 'flex', justifyContent: 'space-between', cursor: 'help' }}
+                        title={`${s.label} — ${value}/100 free · ${interval}`}
+                      >
+                        <span style={{ fontFamily: MONO, fontSize: 9, color: MUTED }}>{s.label}</span>
+                        <span style={{ fontFamily: MONO, fontSize: 9, color: scoreColor(value) }}>
+                          {Math.round(value)}/100
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </div>
           )
         })}
