@@ -14,7 +14,7 @@ const SOURCES = [
 // point estimate; the point is shown and the interval kept on hover.
 const VDEM_SUBSCORES = [
   { label: 'Filtering', key: 'score_vdem_filtering' },
-  { label: 'Shutdown', key: 'score_vdem_shutdown' },
+  { label: 'Shutdown-free', key: 'score_vdem_shutdown' },
   { label: 'Censorship effort', key: 'score_vdem_censorship' },
 ]
 

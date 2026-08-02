@@ -3,6 +3,7 @@ import CategoryBreakdown from './CategoryBreakdown'
 import GlobalIndices from './GlobalIndices'
 import MessagingStatus from './MessagingStatus'
 import OutageTimeline from './OutageTimeline'
+import ResilienceIndex from './ResilienceIndex'
 import TimelineChart from './TimelineChart'
 import TorChart from './TorChart'
 import {
@@ -192,6 +193,8 @@ export default function CountrySidebar({ country, layer, onClose }) {
         <CategoryBreakdown countryCode={country.country_code} />
 
         <OutageTimeline countryCode={country.country_code} />
+
+        <ResilienceIndex countryCode={country.country_code} />
 
         <GlobalIndices countryCode={country.country_code} />
       </div>

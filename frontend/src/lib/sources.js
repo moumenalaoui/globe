@@ -12,6 +12,7 @@ export const SOURCES = [
   { id: 'IODA', label: 'IODA' },
   { id: 'TOR', label: 'Tor' },
   { id: 'CLOUDFLARE', label: 'Cloudflare' },
+  { id: 'ISOC_PULSE', label: 'ISOC Pulse' },
   { id: 'V_DEM', label: 'V-Dem' },
   { id: 'RSF', label: 'RSF' },
 ]
