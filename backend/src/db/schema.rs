@@ -145,6 +145,21 @@ pub fn create_tables(conn: &Connection) -> Result<()> {
         -- scale, kept so the modelled uncertainty stays recoverable.
         -- Any change here must also go in db/migrations.rs — this block only
         -- ever runs against a database that does not exist yet.
+        -- One row per fetcher, rewritten after every attempt. Exists so a
+        -- partial failure is a fact on disk rather than a line in a log
+        -- nobody reads: last_success_at going stale while last_attempt_at
+        -- keeps moving is exactly the quietly-serving-old-data case.
+        -- A new TABLE needs no db/migrations.rs entry — unlike a new column,
+        -- CREATE TABLE IF NOT EXISTS already runs against existing databases.
+        CREATE TABLE IF NOT EXISTS fetch_runs (
+            fetcher              TEXT PRIMARY KEY,
+            last_attempt_at      TEXT,
+            last_success_at      TEXT,
+            last_outcome         TEXT,
+            last_error           TEXT,
+            consecutive_failures INTEGER NOT NULL DEFAULT 0
+        );
+
         CREATE TABLE IF NOT EXISTS country_scores (
             id TEXT PRIMARY KEY,
             country_code TEXT NOT NULL,

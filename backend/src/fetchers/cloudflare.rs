@@ -52,7 +52,10 @@ pub async fn fetch_and_store(state: &AppState) -> Result<()> {
     let token = match std::env::var("CLOUDFLARE_API_TOKEN") {
         Ok(t) if !t.trim().is_empty() => t,
         _ => {
-            eprintln!("cloudflare: CLOUDFLARE_API_TOKEN not set, skipping");
+            eprintln!(
+                "WARNING: cloudflare: CLOUDFLARE_API_TOKEN not set — skipping. \
+                 No Radar outage annotations will be recorded."
+            );
             return Ok(());
         }
     };

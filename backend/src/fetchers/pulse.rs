@@ -85,7 +85,11 @@ pub async fn fetch_and_store(state: &AppState) -> Result<()> {
     let token = match std::env::var("PULSE_API_TOKEN") {
         Ok(t) if !t.trim().is_empty() => t,
         _ => {
-            eprintln!("pulse: PULSE_API_TOKEN not set, skipping");
+            eprintln!(
+                "WARNING: pulse: PULSE_API_TOKEN not set — skipping. The resilience \
+                 panel will read 'No IRI data' for EVERY country, which is \
+                 indistinguishable from Pulse genuinely having no coverage."
+            );
             return Ok(());
         }
     };

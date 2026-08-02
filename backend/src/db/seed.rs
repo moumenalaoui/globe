@@ -10,11 +10,27 @@ use std::fs;
 /// `No such file or directory` from four different loaders is impossible to
 /// act on, and this one kills startup before the listener binds.
 fn read_seed<T: serde::de::DeserializeOwned>(name: &str) -> Result<Vec<T>> {
-    let path = format!("data/seed/{name}");
+    let path = seed_path(name);
     let data = fs::read_to_string(&path).with_context(|| {
-        format!("could not read seed file `{path}` (the working directory must contain `data/seed/`)")
+        format!(
+            "could not read seed file `{path}` — set SEED_DIR, or run with the \
+             working directory that contains `data/seed/` (normally `backend/`)"
+        )
     })?;
     serde_json::from_str(&data).with_context(|| format!("could not parse seed file `{path}`"))
+}
+
+/// Seed files are resolved against `SEED_DIR`, defaulting to the repo-relative
+/// `data/seed`. Configurable because the default is relative to the process
+/// working directory: fine for `cargo run` from `backend/`, not something a
+/// container should have to reproduce exactly.
+pub fn seed_path(name: &str) -> String {
+    let dir = std::env::var("SEED_DIR")
+        .ok()
+        .map(|v| v.trim().trim_end_matches('/').to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "data/seed".to_string());
+    format!("{dir}/{name}")
 }
 
 pub fn load_all(conn: &Connection) -> Result<()> {

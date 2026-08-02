@@ -44,6 +44,26 @@ pub fn is_iso_date(s: &str) -> bool {
         && b[8..].iter().all(u8::is_ascii_digit)
 }
 
+/// Whole days from `from` to `to`, both `YYYY-MM-DD`. Negative when `to` is
+/// earlier. `None` if either side is not a valid ISO date. Used by `/health`
+/// to turn a stored `last_updated` into an age.
+pub fn days_between(from: &str, to: &str) -> Option<i64> {
+    Some(days_from_iso(to)? - days_from_iso(from)?)
+}
+
+fn days_from_iso(s: &str) -> Option<i64> {
+    if !is_iso_date(s) {
+        return None;
+    }
+    let year: i64 = s[0..4].parse().ok()?;
+    let month: u32 = s[5..7].parse().ok()?;
+    let day: u32 = s[8..10].parse().ok()?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    Some(days_from_civil(year, month, day))
+}
+
 fn now_epoch_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -54,6 +74,17 @@ fn now_epoch_secs() -> i64 {
 fn iso_from_epoch_secs(secs: i64) -> String {
     let (y, m, d) = civil_from_days(secs.div_euclid(86_400));
     format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// Inverse of `civil_from_days`, same source.
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = (y - era * 400) as u64;
+    let mp = if m > 2 { m - 3 } else { m + 9 } as u64;
+    let doy = (153 * mp + 2) / 5 + d as u64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe as i64 - 719_468
 }
 
 /// Howard Hinnant's days-since-epoch to civil-date algorithm
@@ -101,6 +132,33 @@ mod tests {
     #[test]
     fn today_and_now_agree_on_the_date_part() {
         assert!(now_utc_iso().starts_with(&today_iso()));
+    }
+
+    #[test]
+    fn days_from_civil_round_trips_civil_from_days() {
+        for z in [0_i64, 19_723, 19_782, 20_000, -1, -719_468] {
+            let (y, m, d) = civil_from_days(z);
+            assert_eq!(days_from_civil(y, m, d), z, "round trip failed for {z}");
+        }
+    }
+
+    #[test]
+    fn days_between_counts_whole_days() {
+        assert_eq!(days_between("2026-08-01", "2026-08-03"), Some(2));
+        assert_eq!(days_between("2026-08-03", "2026-08-03"), Some(0));
+        // Negative when the target is earlier — callers clamp if they need to.
+        assert_eq!(days_between("2026-08-05", "2026-08-03"), Some(-2));
+        // Across a leap day.
+        assert_eq!(days_between("2024-02-28", "2024-03-01"), Some(2));
+        // Across a year boundary.
+        assert_eq!(days_between("2025-12-31", "2026-01-01"), Some(1));
+    }
+
+    #[test]
+    fn days_between_rejects_non_dates() {
+        assert_eq!(days_between("nope", "2026-08-03"), None);
+        assert_eq!(days_between("2026-08-03", "2026-07-01T06:00:00Z"), None);
+        assert_eq!(days_between("2026-13-01", "2026-08-03"), None);
     }
 
     #[test]

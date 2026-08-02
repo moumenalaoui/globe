@@ -22,7 +22,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 // (v2mecenefi) is a V-Dem core Media variable. OWID's mirror publishes one
 // indicator per grapher CSV and carries none of them, which is why this is a
 // committed file rather than another download.
-const DSP_SEED_PATH: &str = "data/seed/vdem_dsp_v16.csv";
+const DSP_SEED_FILE: &str = "vdem_dsp_v16.csv";
 
 // Each variable is stored on its own ordinal scale, and the denominators are
 // NOT the same: v2mecenefi has four categories (0-3), the other two have five
@@ -180,8 +180,10 @@ fn rsf_band(raw: f64) -> String {
 /// have nowhere to land — but a *large* miss count would mean the join broke,
 /// and that has to be visible.
 fn load_dsp_seed(alpha3: &HashMap<String, String>) -> Result<HashMap<String, DspScores>> {
-    let body = std::fs::read_to_string(DSP_SEED_PATH).with_context(|| {
-        format!("could not read `{DSP_SEED_PATH}` (the working directory must contain `data/seed/`)")
+    // Same SEED_DIR resolution as the JSON seeds.
+    let path = crate::db::seed::seed_path(DSP_SEED_FILE);
+    let body = std::fs::read_to_string(&path).with_context(|| {
+        format!("could not read `{path}` — set SEED_DIR, or run from `backend/`")
     })?;
 
     let mut reader = csv::ReaderBuilder::new()
@@ -191,7 +193,7 @@ fn load_dsp_seed(alpha3: &HashMap<String, String>) -> Result<HashMap<String, Dsp
 
     let col = |name: &str| headers.iter().position(|h| h.trim() == name);
     let Some(code_col) = col("country_text_id") else {
-        anyhow::bail!("{DSP_SEED_PATH} missing country_text_id column");
+        anyhow::bail!("{path} missing country_text_id column");
     };
 
     // (point, low, high) column indices per variable, in DSP_VARS order.
@@ -201,7 +203,7 @@ fn load_dsp_seed(alpha3: &HashMap<String, String>) -> Result<HashMap<String, Dsp
         let low = col(&format!("{var}_osp_codelow"));
         let high = col(&format!("{var}_osp_codehigh"));
         let Some(point) = point else {
-            anyhow::bail!("{DSP_SEED_PATH} missing {var}_osp column");
+            anyhow::bail!("{path} missing {var}_osp column");
         };
         var_cols.push((point, low, high, max));
     }

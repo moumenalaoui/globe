@@ -3,6 +3,8 @@ pub mod category_block;
 pub mod country;
 pub mod country_reference;
 pub mod country_score;
+// Only consumed by the unrouted assessment engine.
+#[allow(dead_code)]
 pub mod deployment;
 pub mod model_release;
 pub mod outage_event;
