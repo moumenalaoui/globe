@@ -13,18 +13,39 @@ import {
 } from 'recharts'
 import { BORDER, CRIMSON, MONO, MUTED, SIDEBAR, US_EXPOSURE, WHITE } from '../theme'
 
-// One tick per month rather than one per day — data spans ~2.5 years daily,
-// so a tick per row would be unreadable. Picks the first row seen in each
-// year-month, relying on the API's date-ascending order.
+// Most labels this axis will ever draw.
+//
+// One tick per month was already a big reduction from one per day, but the
+// series spans ~2.5 years, so it still produced 31 labels. Recharts renders
+// every tick handed to it explicitly — it does not thin them — and 31 ×
+// "2026-07" cannot fit the 380px sidebar, so they collided and clipped. Six is
+// what reads cleanly at this width.
+const MAX_TICKS = 6
+
+// One tick per month, then thinned to at most MAX_TICKS by taking every Nth.
+// The last month is always kept: the right edge is where the eye lands to ask
+// "how current is this?", and dropping it to satisfy the stride is the one
+// omission a reader would actually notice.
 function monthlyTicks(rows) {
   const seen = new Set()
-  const ticks = []
+  const months = []
   for (const row of rows) {
     const month = row.date.slice(0, 7)
     if (!seen.has(month)) {
       seen.add(month)
-      ticks.push(row.date)
+      months.push(row.date)
     }
+  }
+  if (months.length <= MAX_TICKS) return months
+
+  const stride = Math.ceil(months.length / MAX_TICKS)
+  const ticks = months.filter((_, i) => i % stride === 0)
+  const last = months[months.length - 1]
+  if (ticks[ticks.length - 1] !== last) {
+    // Replace rather than append, so the stride never leaves two labels
+    // adjacent enough to overlap again at the right edge.
+    if (ticks.length >= MAX_TICKS) ticks.pop()
+    ticks.push(last)
   }
   return ticks
 }

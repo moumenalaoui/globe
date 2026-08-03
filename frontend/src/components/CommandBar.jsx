@@ -67,8 +67,16 @@ export default function CommandBar({ countries, selectedCode, onSelectCountry, c
         borderBottom: `1px solid ${BORDER}`,
       }}
     >
-      <span style={{ fontFamily: SANS, fontWeight: 600, fontSize: 13, letterSpacing: '0.14em', color: WHITE }}>
-        BLACKOUT
+      {/* Wordmark plus a one-line statement of what the tool measures. Without
+          it "BLACKOUT" alone gives a first-time viewer nothing to anchor the
+          globe and the panels to. */}
+      <span style={{ display: 'flex', flexDirection: 'column', gap: 1, flexShrink: 0 }}>
+        <span style={{ fontFamily: SANS, fontWeight: 600, fontSize: 13, letterSpacing: '0.14em', color: WHITE }}>
+          BLACKOUT
+        </span>
+        <span style={{ fontFamily: MONO, fontSize: 8, letterSpacing: '0.06em', color: MUTED, whiteSpace: 'nowrap' }}>
+          INTERNET FREEDOM, MEASURED LIVE
+        </span>
       </span>
 
       <Divider />

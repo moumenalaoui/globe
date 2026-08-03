@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import * as Cesium from 'cesium'
 import * as topojson from 'topojson-client'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
-import { BLACK, CRIMSON } from '../theme'
+import { AMBER, BLACK, CRIMSON } from '../theme'
 import { BLOCKING_STATUS_COLOR } from '../lib/blockingRegistry'
 
 // Read from the environment rather than inlined here: anything in this file
@@ -47,6 +47,17 @@ const HOME_VIEW = { lon: 20.0, lat: 15.0, height: 20_000_000 }
 // both "trouble". Reusing the confirmed-blocked status colour keeps a glow on
 // the globe meaning the same thing as the crimson status in the sidebar.
 const ACUTE_HEX = BLOCKING_STATUS_COLOR.CONFIRMED_BLOCKED ?? CRIMSON
+
+// Likely-blocked countries used to draw nothing at all, so 39 countries the
+// sidebar reported as blocked had no mark on the globe — and on the AI_ACCESS
+// layer, where only one country is confirmed, the globe looked broken. They now
+// bloom amber, reusing the same status colour the sidebar uses, so the
+// confirmed/likely distinction survives instead of being flattened or dropped.
+const LIKELY_HEX = BLOCKING_STATUS_COLOR.LIKELY_BLOCKED ?? AMBER
+
+// Likely blooms are drawn smaller as well as amber: severity reads through size
+// even for a viewer who cannot separate the two hues.
+const LIKELY_RADIUS_SCALE = 0.62
 
 // A css rgba() string from a theme hex + alpha, for the radial-gradient canvas
 // textures below.
@@ -326,17 +337,21 @@ export default function Globe({
     }
 
     for (const [code, entry] of Object.entries(blockingByCode)) {
-      if ((entry?.[layer] ?? 'NO_DATA') !== 'CONFIRMED_BLOCKED') continue
+      const status = entry?.[layer] ?? 'NO_DATA'
+      const confirmed = status === 'CONFIRMED_BLOCKED'
+      const likely = status === 'LIKELY_BLOCKED'
+      if (!confirmed && !likely) continue
 
       const geo = geoByCode[code]
       if (!geo || geo.centroid_lon == null || geo.centroid_lat == null) continue
 
-      // A steady crimson surface bloom, sized by the composite index for
-      // hierarchy. Sits at 3000 m and hugs the surface, so it reads as signal
-      // radiating off the country rather than a pin standing on it. Full-alpha
-      // material lets the hot core carry the brightness, and it carries the
-      // country code so clicking the bloom selects, just like clicking the land.
-      const radius = confirmedRadius(indexByCode[code])
+      // A steady surface bloom, sized by the composite index for hierarchy.
+      // Sits at 3000 m and hugs the surface, so it reads as signal radiating
+      // off the country rather than a pin standing on it. Full-alpha material
+      // lets the hot core carry the brightness, and it carries the country code
+      // so clicking the bloom selects, just like clicking the land.
+      const radius =
+        confirmedRadius(indexByCode[code]) * (confirmed ? 1 : LIKELY_RADIUS_SCALE)
       const bloomEntity = viewer.entities.add({
         position: Cesium.Cartesian3.fromDegrees(geo.centroid_lon, geo.centroid_lat),
         properties: { code },
@@ -345,7 +360,7 @@ export default function Globe({
           semiMinorAxis: radius,
           height: 3000,
           material: new Cesium.ImageMaterialProperty({
-            image: bloomCanvas(ACUTE_HEX),
+            image: bloomCanvas(confirmed ? ACUTE_HEX : LIKELY_HEX),
             transparent: true,
             color: Cesium.Color.WHITE,
           }),

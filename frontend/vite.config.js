@@ -18,6 +18,15 @@ export default defineConfig({
         target: 'http://localhost:3001',
         changeOrigin: true,
       },
+      // `/health` is not under `/api` — it is deliberately kept at the root so
+      // an uptime monitor can poll a stable path. It still has to be forwarded
+      // here: App.jsx reads the data-freshness figure from it, and without
+      // this entry Vite answers with index.html, the JSON parse throws, and
+      // the status bar's DATA AGE silently reads "—" in dev only.
+      '/health': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+      },
     },
   },
 })
