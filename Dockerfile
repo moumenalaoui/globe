@@ -107,13 +107,33 @@ COPY --from=backend  /build/target/release/backend  /app/blackout
 COPY --from=backend  /build/data/seed               /app/data/seed
 COPY --from=frontend /build/dist                    /app/dist
 
-# Run unprivileged. The volume is mounted at /data, so that is the only path
-# this user needs to write to — chown it at build time so first boot can create
-# the database there.
+# The server runs unprivileged, but the container must *start* as root.
+#
+# Chowning /data at build time is not enough: it only survives when the runtime
+# mounts an empty Docker named volume, which inherits the image's ownership.
+# A platform that provisions its own root-owned volume overwrites that, and the
+# unprivileged process then cannot create the database — verified locally, the
+# container exits 1 with "unable to open database file". That is a crash loop,
+# not a degraded start.
+#
+# So: fix the mount's ownership at boot, then drop to the unprivileged user for
+# the server itself. `setpriv` ships in the base image (util-linux), so this
+# needs no extra package, and `exec` keeps the server as PID 1 so signals and
+# platform restarts behave.
 RUN useradd --system --uid 10001 --create-home blackout \
     && mkdir -p /data \
     && chown -R blackout:blackout /data /app
-USER blackout
+
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    'set -e' \
+    '# Only the mount point and its direct contents — a handful of SQLite files,' \
+    '# so this stays instant even with a large database.' \
+    'chown blackout:blackout /data 2>/dev/null || true' \
+    'chown blackout:blackout /data/* 2>/dev/null || true' \
+    'exec setpriv --reuid=10001 --regid=10001 --clear-groups /app/blackout' \
+    > /usr/local/bin/entrypoint.sh \
+    && chmod +x /usr/local/bin/entrypoint.sh
 
 # Defaults baked in so the image is correct even if a dashboard variable is
 # forgotten. Every one of these is still overridable at runtime.
@@ -130,4 +150,4 @@ ENV SEED_DIR=/app/data/seed \
 # to 3001 solely for local runs. Do not set PORT yourself on Railway.
 EXPOSE 3001
 
-CMD ["/app/blackout"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
