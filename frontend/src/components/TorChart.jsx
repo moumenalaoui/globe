@@ -97,12 +97,6 @@ function latestWithTransports(rows) {
   return null
 }
 
-function formatMonthYear(dateStr) {
-  const d = new Date(dateStr)
-  if (Number.isNaN(d.getTime())) return dateStr
-  return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
-}
-
 export default function TorChart({ countryCode }) {
   const [rows, setRows] = useState(null)
   const [error, setError] = useState(false)
@@ -146,7 +140,9 @@ export default function TorChart({ countryCode }) {
     <div style={{ width: '100%' }}>
       <div style={{ width: '100%', height: 180 }}>
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={chartData} margin={{ top: 18, right: 4, bottom: 0, left: 0 }}>
+          {/* top was 18 to clear the reference-line date labels; with those gone
+              the plot gets the space back instead of leaving a gap. */}
+          <ComposedChart data={chartData} margin={{ top: 6, right: 4, bottom: 0, left: 0 }}>
             <CartesianGrid stroke={BORDER} vertical={false} />
             <XAxis
               dataKey="date"
@@ -206,17 +202,17 @@ export default function TorChart({ countryCode }) {
               dot={false}
             />
             {highBlockingGroups.map((group) => (
+              // No label: the dates that used to sit above the plot competed
+              // with the x-axis for the same information and crowded the top of
+              // a 180px chart. The line plus the shaded ReferenceArea already
+              // mark where the blocking episode falls, and the tooltip gives the
+              // exact date on hover.
               <ReferenceLine
                 key={`line-${group.start}`}
                 yAxisId="relay"
                 x={group.start}
                 stroke={CRIMSON}
                 strokeOpacity={0.7}
-                label={{
-                  value: formatMonthYear(group.start),
-                  position: 'top',
-                  style: { fontSize: 9, fill: CRIMSON, fontFamily: MONO },
-                }}
               />
             ))}
           </ComposedChart>
